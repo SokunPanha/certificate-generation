@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState, RefObject } from "react";
+import { useRef, useState, useEffect, RefObject } from "react";
+import { createPortal } from "react-dom";
 import * as fabric from "fabric";
 import type { Canvas, Image as FabricImage } from "fabric";
 import { exportToPDF } from "@/lib/exportPDF";
@@ -35,8 +36,17 @@ export default function Toolbar({
   const watermarkRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLInputElement>(null);
   const templateRef = useRef<HTMLInputElement>(null);
-  const [showVars, setShowVars] = useState(false);
-  const [showSizes, setShowSizes] = useState(false);
+  type PopoverPos = { top: number; left: number } | null;
+  const [varsPos, setVarsPos] = useState<PopoverPos>(null);
+  const [sizesPos, setSizesPos] = useState<PopoverPos>(null);
+
+  // Close both popovers on outside click
+  useEffect(() => {
+    if (!varsPos && !sizesPos) return;
+    const close = () => { setVarsPos(null); setSizesPos(null); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [varsPos, sizesPos]);
 
   const c = () => fabricRef.current;
 
@@ -61,7 +71,7 @@ export default function Toolbar({
   const insertVariable = (varName: string) => {
     const canvas = c();
     if (!canvas) return;
-    setShowVars(false);
+    setVarsPos(null);
     const active = canvas.getActiveObject();
 
     if (active?.type === "textbox" || active?.type === "i-text") {
@@ -242,46 +252,55 @@ export default function Toolbar({
       {sep}
 
       {/* Variables popover */}
-      <div className="relative flex-shrink-0">
+      <div className="flex-shrink-0">
         <button
-          onClick={() => { setShowVars((v) => !v); setShowSizes(false); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            const r = e.currentTarget.getBoundingClientRect();
+            setVarsPos(varsPos ? null : { top: r.bottom + 4, left: r.left });
+            setSizesPos(null);
+          }}
           disabled={!ready}
           className={`${btn} bg-yellow-50 text-yellow-700 hover:bg-yellow-100`}
         >
           <span className="font-mono text-xs">{"{ }"}</span>
           Variables
         </button>
-
-        {showVars && (
-          <div className="absolute top-full left-0 mt-1 z-40 bg-white rounded-xl shadow-xl border border-gray-100 p-3 w-56">
-            <p className="text-xs text-gray-400 mb-2">Click to insert into selected text or create new</p>
-            <div className="grid grid-cols-2 gap-1">
-              {VARIABLES.map((v) => (
-                <button
-                  key={v}
-                  onClick={() => insertVariable(v)}
-                  className="text-left px-2 py-1.5 text-xs font-mono bg-yellow-50 hover:bg-yellow-100 text-yellow-800 rounded-md transition-colors truncate"
-                >
-                  {`{{${v}}}`}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setShowVars(false)}
-              className="mt-2 w-full text-xs text-gray-400 hover:text-gray-600 py-1"
-            >
-              Close
-            </button>
-          </div>
-        )}
       </div>
+
+      {varsPos && createPortal(
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{ position: "fixed", top: varsPos.top, left: varsPos.left, zIndex: 9999 }}
+          className="bg-white rounded-xl shadow-xl border border-gray-100 p-3 w-56"
+        >
+          <p className="text-xs text-gray-400 mb-2">Click to insert into selected text or create new</p>
+          <div className="grid grid-cols-2 gap-1">
+            {VARIABLES.map((v) => (
+              <button
+                key={v}
+                onClick={() => { insertVariable(v); setVarsPos(null); }}
+                className="text-left px-2 py-1.5 text-xs font-mono bg-yellow-50 hover:bg-yellow-100 text-yellow-800 rounded-md transition-colors truncate"
+              >
+                {`{{${v}}}`}
+              </button>
+            ))}
+          </div>
+        </div>,
+        document.body
+      )}
 
       {sep}
 
       {/* Canvas size */}
-      <div className="relative flex-shrink-0">
+      <div className="flex-shrink-0">
         <button
-          onClick={() => { setShowSizes((v) => !v); setShowVars(false); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            const r = e.currentTarget.getBoundingClientRect();
+            setSizesPos(sizesPos ? null : { top: r.bottom + 4, left: r.left });
+            setVarsPos(null);
+          }}
           disabled={!ready}
           className={`${btn} bg-gray-50 text-gray-700 hover:bg-gray-100`}
         >
@@ -291,26 +310,31 @@ export default function Toolbar({
           </svg>
           {canvasSize.label}
         </button>
-
-        {showSizes && (
-          <div className="absolute top-full left-0 mt-1 z-40 bg-white rounded-xl shadow-xl border border-gray-100 py-1 w-44">
-            {CANVAS_SIZES.map((s) => (
-              <button
-                key={s.label}
-                onClick={() => { onCanvasSizeChange(s); setShowSizes(false); }}
-                className={`w-full text-left px-4 py-2 text-sm transition-colors ${
-                  s.label === canvasSize.label
-                    ? "bg-blue-50 text-blue-700 font-medium"
-                    : "text-gray-700 hover:bg-gray-50"
-                }`}
-              >
-                {s.label}
-                <span className="block text-xs text-gray-400">{s.width} × {s.height}</span>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
+
+      {sizesPos && createPortal(
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{ position: "fixed", top: sizesPos.top, left: sizesPos.left, zIndex: 9999 }}
+          className="bg-white rounded-xl shadow-xl border border-gray-100 py-1 w-44"
+        >
+          {CANVAS_SIZES.map((s) => (
+            <button
+              key={s.label}
+              onClick={() => { onCanvasSizeChange(s); setSizesPos(null); }}
+              className={`w-full text-left px-4 py-2 text-sm transition-colors ${
+                s.label === canvasSize.label
+                  ? "bg-blue-50 text-blue-700 font-medium"
+                  : "text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              {s.label}
+              <span className="block text-xs text-gray-400">{s.width} × {s.height}</span>
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
 
       {sep}
 
