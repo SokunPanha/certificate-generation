@@ -2,7 +2,7 @@
 
 import { useState, useRef, RefObject } from "react";
 import type { Canvas, Textbox } from "fabric";
-import { bulkExportZip, BulkProgress } from "@/lib/bulkExport";
+import { bulkExport, type BulkProgress, type ExportMode } from "@/lib/bulkExport";
 
 interface Props {
   fabricRef: RefObject<Canvas | null>;
@@ -75,6 +75,7 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
   const [progress, setProgress] = useState<BulkProgress | null>(null);
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
+  const [mode, setMode] = useState<ExportMode>("combined");
 
   const canvasVars = fabricRef.current ? extractVarsFromCanvas(fabricRef.current) : [];
   const hasVars = canvasVars.length > 0;
@@ -108,7 +109,7 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
     setDone(false);
     setProgress({ current: 0, total: rows.length, label: "Starting…" });
     try {
-      await bulkExportZip(c.toObject(["data"]), rows, c.getWidth(), c.getHeight(), setProgress);
+      await bulkExport(mode, c.toObject(["data"]), rows, c.getWidth(), c.getHeight(), setProgress);
       setDone(true);
     } catch (err) {
       setError(String(err));
@@ -242,7 +243,47 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
           <section>
             <div className="flex items-center gap-2 mb-3">
               <StepBadge n={3} />
-              <h3 className="text-sm font-medium text-gray-700">Generate &amp; download ZIP</h3>
+              <h3 className="text-sm font-medium text-gray-700">Choose output format &amp; generate</h3>
+            </div>
+
+            {/* Mode toggle */}
+            <div className="ml-7 mb-4 grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setMode("combined")}
+                className={`flex flex-col items-start gap-1 px-4 py-3 rounded-xl border-2 text-left transition-colors ${
+                  mode === "combined"
+                    ? "border-blue-500 bg-blue-50 text-blue-700"
+                    : "border-gray-200 text-gray-600 hover:border-gray-300"
+                }`}
+              >
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                    <rect x="1" y="1" width="12" height="12" rx="1.5" />
+                    <path d="M1 4.5h12M1 8h12" />
+                  </svg>
+                  Combined PDF
+                </span>
+                <span className="text-xs opacity-70 leading-tight">One file, all pages — open &amp; print at once</span>
+              </button>
+
+              <button
+                onClick={() => setMode("zip")}
+                className={`flex flex-col items-start gap-1 px-4 py-3 rounded-xl border-2 text-left transition-colors ${
+                  mode === "zip"
+                    ? "border-blue-500 bg-blue-50 text-blue-700"
+                    : "border-gray-200 text-gray-600 hover:border-gray-300"
+                }`}
+              >
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                    <path d="M2 12V4l3-3h5.5a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1z" />
+                    <path d="M5 1v3H2" />
+                    <path d="M6 6h2M6 8.5h2M6 11h2" strokeDasharray="2 1" />
+                  </svg>
+                  Individual ZIP
+                </span>
+                <span className="text-xs opacity-70 leading-tight">Separate PDF per student in a ZIP</span>
+              </button>
             </div>
 
             {error && (
@@ -264,7 +305,10 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
             {done && (
               <div className="ml-7 mb-3 text-sm text-green-700 bg-green-50 rounded-xl px-4 py-3 flex items-center gap-2">
                 <span>✓</span>
-                <span>{rows.length} certificates exported — check your Downloads folder.</span>
+                <span>
+                  {rows.length} certificates exported as{" "}
+                  {mode === "combined" ? "a combined PDF" : "a ZIP"} — check your Downloads folder.
+                </span>
               </div>
             )}
 

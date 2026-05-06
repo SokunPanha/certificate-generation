@@ -8,6 +8,7 @@ import Toolbar from "./Toolbar";
 import LayersPanel from "./LayersPanel";
 import PropertiesPanel from "./PropertiesPanel";
 import BulkExportModal from "./BulkExportModal";
+import TemplatesModal from "./TemplatesModal";
 
 export type FabricCanvas = Canvas;
 
@@ -33,6 +34,7 @@ export default function Editor() {
   const [layers, setLayers] = useState<FabricObject[]>([]);
   const [canvasSize, setCanvasSizeState] = useState<CanvasSize>(CANVAS_SIZES[0]);
   const [showBulk, setShowBulk] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
 
   // Undo / Redo history
   const historyRef = useRef<string[]>([]);
@@ -129,6 +131,25 @@ export default function Editor() {
     }
   }, [syncLayers, saveSnapshot]);
 
+  const loadTemplateData = useCallback(async (json: Record<string, unknown>) => {
+    const c = fabricRef.current;
+    if (!c) return;
+    if (json._certgen && typeof json._certgen === "object") {
+      const meta = json._certgen as { canvasSize?: CanvasSize };
+      if (meta.canvasSize) {
+        const s = meta.canvasSize;
+        c.setDimensions({ width: s.width, height: s.height });
+        setCanvasSizeState(s);
+      }
+    }
+    const { _certgen: _, ...canvasJSON } = json;
+    await c.loadFromJSON(canvasJSON);
+    c.renderAll();
+    setActiveObject(null);
+    syncLayers();
+    saveSnapshot();
+  }, [syncLayers, saveSnapshot]);
+
   useEffect(() => {
     if (!canvasElRef.current) return;
 
@@ -213,6 +234,7 @@ export default function Editor() {
         onSaveTemplate={saveTemplate}
         onLoadTemplate={loadTemplate}
         onOpenBulk={() => setShowBulk(true)}
+        onOpenTemplates={() => setShowTemplates(true)}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -235,6 +257,15 @@ export default function Editor() {
 
       {showBulk && (
         <BulkExportModal fabricRef={fabricRef} onClose={() => setShowBulk(false)} />
+      )}
+
+      {showTemplates && (
+        <TemplatesModal
+          fabricRef={fabricRef}
+          canvasSize={canvasSize}
+          onLoad={loadTemplateData}
+          onClose={() => setShowTemplates(false)}
+        />
       )}
     </div>
   );

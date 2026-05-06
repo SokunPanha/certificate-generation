@@ -24,13 +24,14 @@ interface Props {
   onSaveTemplate: () => void;
   onLoadTemplate: (file: File) => Promise<void>;
   onOpenBulk: () => void;
+  onOpenTemplates: () => void;
 }
 
 export default function Toolbar({
   fabricRef, ready, syncLayers, saveSnapshot,
   undo, redo,
   canvasSize, onCanvasSizeChange,
-  onSaveTemplate, onLoadTemplate, onOpenBulk,
+  onSaveTemplate, onLoadTemplate, onOpenBulk, onOpenTemplates,
 }: Props) {
   const frameRef = useRef<HTMLInputElement>(null);
   const watermarkRef = useRef<HTMLInputElement>(null);
@@ -355,6 +356,16 @@ export default function Toolbar({
         Load
       </button>
       <input ref={templateRef} type="file" accept=".json,application/json" onChange={handleLoadTemplate} className="hidden" />
+
+      <button onClick={onOpenTemplates} disabled={!ready} className={`${btn} text-indigo-600 hover:bg-indigo-50`}>
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+          <rect x="1" y="1" width="4.5" height="4.5" rx="0.7" />
+          <rect x="7.5" y="1" width="4.5" height="4.5" rx="0.7" />
+          <rect x="1" y="7.5" width="4.5" height="4.5" rx="0.7" />
+          <rect x="7.5" y="7.5" width="4.5" height="4.5" rx="0.7" />
+        </svg>
+        Templates
+      </button>
 
       <div className="flex-1" />
 
