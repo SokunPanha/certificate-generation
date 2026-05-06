@@ -40,6 +40,7 @@ export default function Editor() {
   const historyRef = useRef<string[]>([]);
   const histCursorRef = useRef(-1);
   const isRestoringRef = useRef(false);
+  const clipboardRef = useRef<FabricObject | null>(null);
 
   const syncLayers = useCallback(() => {
     const c = fabricRef.current;
@@ -182,6 +183,85 @@ export default function Editor() {
     canvas.on("object:modified", saveSnapshot);
     canvas.on("text:changed", saveSnapshot);
 
+    // --- Alignment guides ---
+    const guides = { h: [] as number[], v: [] as number[] };
+    const SNAP = 8;
+
+    const getAlignPoints = (o: FabricObject) => {
+      const br = o.getBoundingRect();
+      return {
+        x: [br.left, br.left + br.width / 2, br.left + br.width],
+        y: [br.top, br.top + br.height / 2, br.top + br.height],
+      };
+    };
+
+    canvas.on("object:moving", (e) => {
+      const obj = (e as unknown as { target: FabricObject }).target;
+      if (!obj) return;
+      const cw = canvas.getWidth();
+      const ch = canvas.getHeight();
+      guides.h = [];
+      guides.v = [];
+
+      const { x: objX, y: objY } = getAlignPoints(obj);
+      const snapXs = [0, cw / 2, cw];
+      const snapYs = [0, ch / 2, ch];
+      for (const other of canvas.getObjects()) {
+        if (other === obj) continue;
+        const p = getAlignPoints(other);
+        snapXs.push(...p.x);
+        snapYs.push(...p.y);
+      }
+
+      let bestDx = Infinity, snapDx = 0, guideX: number | null = null;
+      let bestDy = Infinity, snapDy = 0, guideY: number | null = null;
+
+      for (const ox of objX) {
+        for (const sx of snapXs) {
+          const d = Math.abs(ox - sx);
+          if (d < SNAP && d < bestDx) { bestDx = d; snapDx = ox - sx; guideX = sx; }
+        }
+      }
+      for (const oy of objY) {
+        for (const sy of snapYs) {
+          const d = Math.abs(oy - sy);
+          if (d < SNAP && d < bestDy) { bestDy = d; snapDy = oy - sy; guideY = sy; }
+        }
+      }
+
+      if (guideX !== null) { obj.set({ left: (obj.left ?? 0) - snapDx }); guides.v.push(guideX); }
+      if (guideY !== null) { obj.set({ top: (obj.top ?? 0) - snapDy }); guides.h.push(guideY); }
+      if (guideX !== null || guideY !== null) obj.setCoords();
+    });
+
+    canvas.on("after:render", () => {
+      if (!guides.h.length && !guides.v.length) return;
+      const ctx = (canvas as unknown as { contextContainer: CanvasRenderingContext2D }).contextContainer;
+      const cw = canvas.getWidth();
+      const ch = canvas.getHeight();
+      ctx.save();
+      ctx.strokeStyle = "#e83e8c";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      for (const y of guides.h) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cw, y); ctx.stroke();
+      }
+      for (const x of guides.v) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ch); ctx.stroke();
+      }
+      ctx.restore();
+    });
+
+    const clearGuides = () => {
+      if (!guides.h.length && !guides.v.length) return;
+      guides.h = [];
+      guides.v = [];
+      canvas.requestRenderAll();
+    };
+
+    canvas.on("object:modified", clearGuides);
+    canvas.on("mouse:up", clearGuides);
+
     const handleKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       const isEditing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
@@ -197,6 +277,37 @@ export default function Editor() {
         return;
       }
 
+      if ((e.metaKey || e.ctrlKey) && e.key === "c") {
+        if (isEditing) return;
+        const c = fabricRef.current;
+        if (!c) return;
+        const obj = c.getActiveObject();
+        if (!obj || (obj as { isEditing?: boolean }).isEditing) return;
+        obj.clone(["data"]).then((cloned: FabricObject) => {
+          clipboardRef.current = cloned;
+        });
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key === "v") {
+        if (isEditing || !clipboardRef.current) return;
+        const c = fabricRef.current;
+        if (!c) return;
+        const active = c.getActiveObject();
+        if ((active as { isEditing?: boolean })?.isEditing) return;
+        e.preventDefault();
+        clipboardRef.current.clone(["data"]).then((pasted: FabricObject) => {
+          const newLeft = (clipboardRef.current!.left ?? 0) + 20;
+          const newTop = (clipboardRef.current!.top ?? 0) + 20;
+          pasted.set({ left: newLeft, top: newTop, evented: true });
+          clipboardRef.current!.set({ left: newLeft, top: newTop });
+          c.add(pasted);
+          c.setActiveObject(pasted);
+          c.renderAll();
+        });
+        return;
+      }
+
       if ((e.key === "Delete" || e.key === "Backspace") && !isEditing) {
         const c = fabricRef.current;
         if (!c) return;
@@ -207,6 +318,24 @@ export default function Editor() {
           c.renderAll();
           setActiveObject(null);
         }
+      }
+
+      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key) && !isEditing) {
+        const c = fabricRef.current;
+        if (!c) return;
+        const obj = c.getActiveObject();
+        if (!obj || (obj as { isEditing?: boolean }).isEditing) return;
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+        const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+        obj.set({ left: (obj.left ?? 0) + dx, top: (obj.top ?? 0) + dy });
+        obj.setCoords();
+        c.renderAll();
+        // Debounce snapshot so rapid key-repeat doesn't flood history
+        clearTimeout((handleKey as unknown as { _t?: ReturnType<typeof setTimeout> })._t);
+        (handleKey as unknown as { _t?: ReturnType<typeof setTimeout> })._t =
+          setTimeout(() => saveSnapshot(), 400);
       }
     };
 
