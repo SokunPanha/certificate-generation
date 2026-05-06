@@ -9,6 +9,8 @@ import FontPicker from "./FontPicker";
 interface Props {
   activeObject: FabricObject | null;
   fabricRef: RefObject<Canvas | null>;
+  bgColor: string;
+  onBgColorChange: (color: string) => void;
 }
 
 function isTextObj(obj: FabricObject | null): obj is Textbox {
@@ -18,7 +20,7 @@ function isTextObj(obj: FabricObject | null): obj is Textbox {
   );
 }
 
-export default function PropertiesPanel({ activeObject, fabricRef }: Props) {
+export default function PropertiesPanel({ activeObject, fabricRef, bgColor, onBgColorChange }: Props) {
   const [fontFamily, setFontFamily] = useState("Arial");
   const [fontSize, setFontSize] = useState(28);
   const [bold, setBold] = useState(false);
@@ -115,12 +117,45 @@ export default function PropertiesPanel({ activeObject, fabricRef }: Props) {
 
   if (!activeObject) {
     return (
-      <aside className="w-64 flex-shrink-0 bg-white border-l border-gray-200 p-4">
-        <p className="text-xs text-gray-400 text-center mt-12 leading-5">
-          Select an element
-          <br />
-          to edit its properties
-        </p>
+      <aside className="w-64 flex-shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-y-auto">
+        <div className="px-4 py-2 border-b border-gray-100">
+          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Canvas</h2>
+        </div>
+        <div className="p-4 space-y-5">
+          <section className="relative">
+            <label className="text-xs text-gray-500 mb-1 block">Background Color</label>
+            <button
+              onClick={() => setShowPicker((v) => !v)}
+              className="flex items-center gap-2 w-full border border-gray-200 rounded-md px-2 py-1.5 hover:bg-gray-50 transition-colors"
+            >
+              <span
+                className="w-5 h-5 rounded border border-gray-300 flex-shrink-0"
+                style={{ backgroundColor: bgColor }}
+              />
+              <span className="text-sm text-gray-700 font-mono">{bgColor.toUpperCase()}</span>
+            </button>
+            {showPicker && (
+              <div className="absolute left-0 z-50 mt-1 bg-white rounded-xl shadow-2xl border border-gray-100 p-3 space-y-2">
+                <HexColorPicker color={bgColor} onChange={onBgColorChange} />
+                <input
+                  type="text"
+                  value={bgColor}
+                  onChange={(e) => onBgColorChange(e.target.value)}
+                  className="w-full text-xs border border-gray-200 rounded-md px-2 py-1 font-mono focus:outline-none focus:ring-1 focus:ring-blue-400"
+                />
+                <button
+                  onClick={() => setShowPicker(false)}
+                  className="w-full py-1.5 text-xs bg-gray-50 hover:bg-gray-100 text-gray-600 rounded-md transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            )}
+          </section>
+          <p className="text-xs text-gray-400 leading-5">
+            Select an element to edit its properties.
+          </p>
+        </div>
       </aside>
     );
   }

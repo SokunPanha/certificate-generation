@@ -2,7 +2,7 @@
 
 import { useState, useRef, RefObject } from "react";
 import type { Canvas, Textbox } from "fabric";
-import { bulkExport, type BulkProgress, type ExportMode } from "@/lib/bulkExport";
+import { bulkExport, renderRow, type BulkProgress, type ExportMode } from "@/lib/bulkExport";
 
 interface Props {
   fabricRef: RefObject<Canvas | null>;
@@ -76,6 +76,8 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
   const [mode, setMode] = useState<ExportMode>("combined");
+  const [previewDataURL, setPreviewDataURL] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const canvasVars = fabricRef.current ? extractVarsFromCanvas(fabricRef.current) : [];
   const hasVars = canvasVars.length > 0;
@@ -91,6 +93,7 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
     setError("");
     setDone(false);
     setProgress(null);
+    setPreviewDataURL(null);
     try {
       const { headers: h, rows: r } = await parseXLSX(file);
       if (!r.length) { setError("File is empty or could not be read."); return; }
@@ -100,6 +103,23 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
       setError(String(err));
     }
     e.target.value = "";
+  };
+
+  const handlePreviewRow = async () => {
+    const c = fabricRef.current;
+    if (!c || !rows.length) return;
+    setPreviewLoading(true);
+    setPreviewDataURL(null);
+    try {
+      const fabric = await import("fabric");
+      const templateStr = JSON.stringify(c.toObject(["data"]));
+      const dataURL = await renderRow(fabric, templateStr, rows[0], c.getWidth(), c.getHeight());
+      setPreviewDataURL(dataURL);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setPreviewLoading(false);
+    }
   };
 
   const handleGenerate = async () => {
@@ -239,10 +259,41 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
             )}
           </section>
 
-          {/* Step 3 */}
+          {/* Row 1 Preview */}
+          {rows.length > 0 && (
+            <section>
+              <div className="flex items-center gap-2 mb-3">
+                <StepBadge n={3} />
+                <h3 className="text-sm font-medium text-gray-700">Preview first row before generating</h3>
+              </div>
+              <div className="ml-7">
+                <button
+                  onClick={handlePreviewRow}
+                  disabled={previewLoading}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-sm rounded-xl transition-colors disabled:opacity-50"
+                >
+                  <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 15 15">
+                    <ellipse cx="7.5" cy="7.5" rx="7" ry="4.5" />
+                    <circle cx="7.5" cy="7.5" r="2" fill="currentColor" stroke="none" />
+                  </svg>
+                  {previewLoading ? "Rendering…" : "Preview Row 1"}
+                </button>
+                {previewDataURL && (
+                  <div className="mt-3 rounded-xl overflow-hidden border border-gray-200 shadow-sm">
+                    <img src={previewDataURL} alt="Row 1 preview" className="w-full" />
+                    <p className="text-xs text-gray-400 text-center py-1.5 bg-gray-50 border-t border-gray-100">
+                      Row 1 preview — {rows[0][Object.keys(rows[0])[0]] ?? ""}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* Step 4 */}
           <section>
             <div className="flex items-center gap-2 mb-3">
-              <StepBadge n={3} />
+              <StepBadge n={4} />
               <h3 className="text-sm font-medium text-gray-700">Choose output format &amp; generate</h3>
             </div>
 

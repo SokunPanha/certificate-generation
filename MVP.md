@@ -1,0 +1,32 @@
+# CertGen MVP Features
+
+## Done
+- [x] Canvas editor (Fabric.js)
+- [x] Text editing with font picker (Khmer + Google + System fonts)
+- [x] Font search
+- [x] Layers panel (reorder, delete)
+- [x] Properties panel (font, size, bold/italic/underline, alignment, color, opacity)
+- [x] Add text, image, frame, watermark
+- [x] Variables (`{{name}}`, `{{grade}}`, etc.)
+- [x] Undo / Redo (Ctrl+Z / Ctrl+Y)
+- [x] Delete element (Delete / Backspace)
+- [x] Copy / Paste element (Ctrl+C / Ctrl+V)
+- [x] Arrow key nudge (1px / 10px with Shift)
+- [x] Alignment guides & snapping while dragging
+- [x] Canvas size selector (A4, A5, Letter, Square)
+- [x] Single PDF export
+- [x] Bulk export from Excel — combined PDF or ZIP
+- [x] Save / Load template (JSON file)
+- [x] Templates library (IndexedDB, search, thumbnails)
+- [x] **Lock / unlock elements** — lock icon in layers panel; locked elements are non-selectable on canvas
+- [x] **Shape tools** — rectangle, circle, line via Shapes popover in toolbar
+- [x] **Canvas background color** — color picker in toolbar (BG button) and properties panel
+- [x] **Group / ungroup** — Ctrl+G to toggle; Group/Ungroup buttons appear contextually in toolbar
+- [x] **Zoom in / out** — Ctrl+scroll + toolbar ±/% controls + Ctrl+0 reset; CSS-transform zoom doesn't affect export
+- [x] **Variable preview mode** — Preview button fills `{{name}}` etc. with sample data on canvas
+- [x] **Duplicate button** — visible duplicate action in layers panel
+- [x] **Rename layers** — double-click layer name to label it; stored in `obj.data.name`
+- [x] **Export as PNG / JPG** — Export dropdown in toolbar (PDF / PNG / JPG)
+- [x] **Single-row preview before bulk** — "Preview Row 1" button in bulk modal renders first Excel row
+- [x] **Auto-save** — saves canvas to IndexedDB every 30s; shows "last saved" timestamp; offers restore on load
+- [x] **QR code element** — QR Code button with URL input; supports `{{variable}}` for per-row QR in bulk export

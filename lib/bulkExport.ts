@@ -14,7 +14,7 @@ function fillPlaceholders(jsonStr: string, row: Record<string, string>): string 
   return result;
 }
 
-async function renderRow(
+export async function renderRow(
   fabric: typeof import("fabric"),
   templateStr: string,
   row: Record<string, string>,
@@ -22,6 +22,19 @@ async function renderRow(
   canvasHeight: number
 ): Promise<string> {
   const filledJSON = JSON.parse(fillPlaceholders(templateStr, row));
+
+  // Regenerate QR code images for objects that have a qrText pattern
+  for (const obj of (filledJSON.objects ?? []) as Record<string, unknown>[]) {
+    const data = obj.data as { role?: string; qrText?: string } | undefined;
+    if (data?.role === "qr" && data?.qrText) {
+      try {
+        const QRCode = (await import("qrcode")).default;
+        obj.src = await QRCode.toDataURL(data.qrText, { width: 200, margin: 1 });
+      } catch {
+        // keep original src on failure
+      }
+    }
+  }
   const el = document.createElement("canvas");
   el.style.cssText = "position:absolute;left:-9999px;top:-9999px;";
   document.body.appendChild(el);
