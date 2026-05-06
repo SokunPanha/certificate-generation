@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback, RefObject } from "react";
 import type { Canvas, Object as FabricObject, Textbox } from "fabric";
 import { HexColorPicker } from "react-colorful";
-import { FONTS, loadFont } from "@/lib/fonts";
+import { loadFont } from "@/lib/fonts";
+import FontPicker from "./FontPicker";
 
 interface Props {
   activeObject: FabricObject | null;
@@ -159,17 +160,7 @@ export default function PropertiesPanel({ activeObject, fabricRef }: Props) {
               <label className="text-xs text-gray-500 mb-1 block">
                 Font Family
               </label>
-              <select
-                value={fontFamily}
-                onChange={(e) => handleFont(e.target.value)}
-                className="w-full text-sm border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
-              >
-                {FONTS.map((f) => (
-                  <option key={f.value} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
+              <FontPicker value={fontFamily} onChange={handleFont} />
             </section>
 
             {/* Font Size */}
