@@ -29,16 +29,16 @@ export const CANVAS_SIZES: CanvasSize[] = [
 ];
 
 const PREVIEW_DATA: Record<string, string> = {
-  name: "Kosol Pisith",
+  name: "កុសល ពិសិទ្ធ",
   grade: "A",
   class: "7A",
-  rank: "1",
-  school: "Hun Sen High School",
-  date: "March 23, 2026",
-  result: "Pass",
+  rank: "១",
+  school: "វិទ្យាល័យ ហ៊ុន សែន",
+  date: "២៣ មិនា ២០២៦",
+  result: "ជាប់",
   year: "2025-2026",
-  semester: "1",
-  gender: "Male",
+  semester: "១",
+  gender: "ប្រុស",
 };
 
 const MIN_ZOOM = 0.25;
@@ -55,7 +55,9 @@ export default function Editor() {
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(1);
   const [previewMode, setPreviewMode] = useState(false);
+  const previewModeRef = useRef(false);
   const previewOriginalsRef = useRef<Map<FabricObject, string>>(new Map());
+  const [previewToast, setPreviewToast] = useState<string | null>(null);
   const [showBulk, setShowBulk] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
@@ -83,7 +85,22 @@ export default function Editor() {
     histCursorRef.current = historyRef.current.length - 1;
   }, []);
 
+  const exitPreview = useCallback(() => {
+    const c = fabricRef.current;
+    if (!previewModeRef.current || !c) return;
+    isRestoringRef.current = true;
+    previewOriginalsRef.current.forEach((originalText, obj) => {
+      (obj as Textbox).set({ text: originalText });
+    });
+    isRestoringRef.current = false;
+    previewOriginalsRef.current.clear();
+    previewModeRef.current = false;
+    setPreviewMode(false);
+    c.renderAll();
+  }, []);
+
   const undo = useCallback(async () => {
+    exitPreview();
     const c = fabricRef.current;
     if (!c || histCursorRef.current <= 0) return;
     histCursorRef.current--;
@@ -93,9 +110,10 @@ export default function Editor() {
     isRestoringRef.current = false;
     setActiveObject(null);
     syncLayers();
-  }, [syncLayers]);
+  }, [syncLayers, exitPreview]);
 
   const redo = useCallback(async () => {
+    exitPreview();
     const c = fabricRef.current;
     if (!c || histCursorRef.current >= historyRef.current.length - 1) return;
     histCursorRef.current++;
@@ -105,7 +123,7 @@ export default function Editor() {
     isRestoringRef.current = false;
     setActiveObject(null);
     syncLayers();
-  }, [syncLayers]);
+  }, [syncLayers, exitPreview]);
 
   const changeCanvasSize = useCallback((size: CanvasSize) => {
     const c = fabricRef.current;
@@ -137,8 +155,9 @@ export default function Editor() {
     const c = fabricRef.current;
     if (!c) return;
 
-    if (!previewMode) {
+    if (!previewModeRef.current) {
       const originals = new Map<FabricObject, string>();
+      isRestoringRef.current = true;
       c.getObjects().forEach((obj) => {
         if (obj.type === "textbox" || obj.type === "i-text" || obj.type === "text") {
           const tb = obj as Textbox;
@@ -150,18 +169,29 @@ export default function Editor() {
           }
         }
       });
+      isRestoringRef.current = false;
       previewOriginalsRef.current = originals;
       c.renderAll();
+
+      if (originals.size === 0) {
+        setPreviewToast("No {{variables}} found on canvas — add text with {{name}}, {{grade}}, etc.");
+        setTimeout(() => setPreviewToast(null), 4000);
+        return;
+      }
+      previewModeRef.current = true;
       setPreviewMode(true);
     } else {
+      isRestoringRef.current = true;
       previewOriginalsRef.current.forEach((originalText, obj) => {
         (obj as Textbox).set({ text: originalText });
       });
+      isRestoringRef.current = false;
       previewOriginalsRef.current.clear();
       c.renderAll();
+      previewModeRef.current = false;
       setPreviewMode(false);
     }
-  }, [previewMode]);
+  }, []);
 
   const groupSelected = useCallback(() => {
     const c = fabricRef.current;
@@ -312,7 +342,7 @@ export default function Editor() {
     if (!ready) return;
     const interval = setInterval(async () => {
       const c = fabricRef.current;
-      if (!c || isRestoringRef.current) return;
+      if (!c || isRestoringRef.current || previewModeRef.current) return;
       try {
         await autoSave(
           JSON.stringify(c.toObject(["data"])),
@@ -638,11 +668,28 @@ export default function Editor() {
             <circle cx="6" cy="6" r="5" />
             <circle cx="6" cy="6" r="2" fill="currentColor" stroke="none" />
           </svg>
-          Preview mode — variables replaced with sample data. Changes are not saved.
+          Preview mode — variables replaced with sample data. Edits and auto-save are paused.
+          <button
+            onClick={togglePreviewMode}
+            className="ml-2 underline hover:no-underline"
+          >
+            Exit
+          </button>
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
+      {/* Toast for no-variables feedback */}
+      {previewToast && (
+        <div className="flex items-center justify-center gap-2 px-4 py-1.5 bg-orange-50 border-b border-orange-200 text-xs text-orange-700 flex-shrink-0">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <circle cx="6" cy="6" r="5" />
+            <path d="M6 4v3M6 8.5v.5" strokeLinecap="round" />
+          </svg>
+          {previewToast}
+        </div>
+      )}
+
+      <div className="flex flex-1 overflow-hidden min-w-0">
         <LayersPanel
           layers={layers}
           fabricRef={fabricRef}
@@ -653,39 +700,15 @@ export default function Editor() {
         />
 
         <div
-          className="flex-1 overflow-auto bg-gray-300"
+          className="flex-1 min-w-0 overflow-hidden bg-gray-300 flex items-center justify-center"
           onWheel={handleWheel}
         >
-          {/* Sized wrapper so scrollbar reflects zoom-adjusted canvas size */}
+          {/* CSS-transform zoom — does NOT change canvas data dimensions, so export is unaffected */}
           <div
-            className="flex items-center justify-center"
-            style={{
-              minWidth: canvasSize.width * zoom + 64,
-              minHeight: canvasSize.height * zoom + 64,
-              padding: "2rem",
-            }}
+            style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
+            className="shadow-2xl ring-1 ring-black/10 flex-shrink-0"
           >
-            {/* CSS-transform zoom — does NOT change canvas data dimensions, so export is unaffected */}
-            <div
-              style={{
-                width: canvasSize.width * zoom,
-                height: canvasSize.height * zoom,
-                flexShrink: 0,
-                position: "relative",
-              }}
-            >
-              <div
-                style={{
-                  width: canvasSize.width,
-                  height: canvasSize.height,
-                  transform: `scale(${zoom})`,
-                  transformOrigin: "0 0",
-                }}
-                className="shadow-2xl ring-1 ring-black/10"
-              >
-                <canvas ref={canvasElRef} />
-              </div>
-            </div>
+            <canvas ref={canvasElRef} />
           </div>
         </div>
 

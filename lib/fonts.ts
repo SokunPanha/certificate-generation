@@ -80,16 +80,47 @@ export async function loadFont(family: string): Promise<void> {
     document.head.appendChild(link);
   } else if (font.local && font.file) {
     const ext = (font.file.split(".").pop() ?? "ttf").toLowerCase();
-    const format = ext === "otf" ? "opentype" : "truetype";
-    const encodedPath = encodeURI(`/khmer font/${font.file}`);
+    const isOtf = ext === "otf";
+    const format = isOtf ? "opentype" : "truetype";
+    // Encode each path segment individually so spaces and special chars in
+    // both the folder name and the file name are handled correctly.
+    const encodedPath =
+      "/khmer%20font/" + font.file.split("").map((ch) => {
+        // Characters safe in a CSS url() without extra encoding
+        if (/[A-Za-z0-9\-_.~]/.test(ch)) return ch;
+        return encodeURIComponent(ch);
+      }).join("");
+
     const escaped = family.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    const style = document.createElement("style");
-    style.textContent = `@font-face { font-family: "${escaped}"; src: url("${encodedPath}") format("${format}"); font-display: swap; }`;
-    document.head.appendChild(style);
+
+    // Use FontFace API directly — gives us a reliable load promise
+    const face = new FontFace(family, `url("${encodedPath}") format("${format}")`);
+    document.fonts.add(face);
+    try {
+      await face.load();
+    } catch {
+      // Fall back: inject @font-face and wait for the font to appear in FontFaceSet
+      const style = document.createElement("style");
+      style.textContent = `@font-face { font-family: "${escaped}"; src: url("${encodedPath}") format("${format}"); font-display: block; }`;
+      document.head.appendChild(style);
+      try {
+        await document.fonts.load(`normal 400 16px "${family}"`);
+      } catch {
+        // best-effort — continue even if font check fails
+      }
+    }
+    loaded.add(family);
+    return;
   } else {
     return;
   }
 
-  await document.fonts.ready;
+  // For Google Fonts: wait until the font is actually usable (not just stylesheet inserted)
+  try {
+    await document.fonts.load(`normal 400 16px "${family}"`);
+    await document.fonts.load(`bold 700 16px "${family}"`);
+  } catch {
+    await document.fonts.ready;
+  }
   loaded.add(family);
 }

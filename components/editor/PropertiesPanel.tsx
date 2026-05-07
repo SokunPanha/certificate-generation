@@ -70,7 +70,14 @@ export default function PropertiesPanel({ activeObject, fabricRef, bgColor, onBg
   const handleFont = async (family: string) => {
     setFontFamily(family);
     await loadFont(family);
-    applyProp({ fontFamily: family });
+    if (!activeObject) return;
+    activeObject.set({ fontFamily: family });
+    // Force Fabric.js to re-measure glyph widths after the new font loads
+    const maybeText = activeObject as unknown as { initDimensions?: () => void };
+    if (typeof maybeText.initDimensions === "function") {
+      maybeText.initDimensions();
+    }
+    fabricRef.current?.renderAll();
   };
 
   const handleSize = (size: number) => {
