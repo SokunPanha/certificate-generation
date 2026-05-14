@@ -57,7 +57,7 @@ export default function TemplatesModal({ fabricRef, canvasSize, onLoad, onClose 
       const thumbnail = c.toDataURL({ multiplier: 0.18, format: "jpeg", quality: 0.7 });
       const canvasJSON = JSON.stringify({
         ...c.toObject(["data"]),
-        _certgen: { canvasSize },
+        _certgen: { canvasSize, bgColor: (c.backgroundColor as string) || "#ffffff" },
       });
       await saveTemplate({ name: trimmed, thumbnail, canvasJSON });
       setName("");

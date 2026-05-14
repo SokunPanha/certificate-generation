@@ -7,10 +7,11 @@ import type { Canvas, Object as FabricObject, Textbox } from "fabric";
 import Toolbar from "./Toolbar";
 import LayersPanel from "./LayersPanel";
 import PropertiesPanel from "./PropertiesPanel";
+import PagesPanel from "./PagesPanel";
 import BulkExportModal from "./BulkExportModal";
 import TemplatesModal from "./TemplatesModal";
-import { autoSave, loadAutoSaved, type AutoSaveRecord } from "@/lib/autoSave";
-import { exportToImage } from "@/lib/exportImage";
+import ExportModal from "./ExportModal";
+import { autoSave, loadAutoSaved, type AutoSaveRecord, type SavedPage } from "@/lib/autoSave";
 
 export type FabricCanvas = Canvas;
 
@@ -28,6 +29,13 @@ export const CANVAS_SIZES: CanvasSize[] = [
   { label: "Square", width: 700, height: 700 },
 ];
 
+export interface Page {
+  id: string;
+  canvasJSON: string;
+  bgColor: string;
+  thumbnail: string;
+}
+
 const PREVIEW_DATA: Record<string, string> = {
   name: "កុសល ពិសិទ្ធ",
   grade: "A",
@@ -44,6 +52,12 @@ const PREVIEW_DATA: Record<string, string> = {
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 3;
 
+const EMPTY_CANVAS_JSON = JSON.stringify({ version: "6.0.0", objects: [] });
+
+function makePage(canvasJSON: string, bgColor: string, thumbnail = ""): Page {
+  return { id: crypto.randomUUID(), canvasJSON, bgColor, thumbnail };
+}
+
 export default function Editor() {
   const canvasElRef = useRef<HTMLCanvasElement>(null);
   const fabricRef = useRef<Canvas | null>(null);
@@ -54,16 +68,25 @@ export default function Editor() {
   const [bgColor, setBgColorState] = useState("#ffffff");
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(1);
+
+  // Multi-page state
+  const [pages, setPages] = useState<Page[]>([]);
+  const [currentPageIdx, setCurrentPageIdx] = useState(0);
+  const pagesRef = useRef<Page[]>([]);
+  const currentPageIdxRef = useRef(0);
+
   const [previewMode, setPreviewMode] = useState(false);
   const previewModeRef = useRef(false);
   const previewOriginalsRef = useRef<Map<FabricObject, string>>(new Map());
   const [previewToast, setPreviewToast] = useState<string | null>(null);
   const [showBulk, setShowBulk] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [showExport, setShowExport] = useState(false);
+  const [exportPages, setExportPages] = useState<Page[]>([]);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [autoSaveRestore, setAutoSaveRestore] = useState<AutoSaveRecord | null>(null);
 
-  // Undo / Redo history
+  // Undo / Redo history (per-page; resets on page switch)
   const historyRef = useRef<string[]>([]);
   const histCursorRef = useRef(-1);
   const isRestoringRef = useRef(false);
@@ -85,6 +108,94 @@ export default function Editor() {
     histCursorRef.current = historyRef.current.length - 1;
   }, []);
 
+  // ── Page utilities ───────────────────────────────────────────────────────────
+
+  const captureCurrentPage = useCallback((): Page => {
+    const c = fabricRef.current!;
+    let thumbnail = pagesRef.current[currentPageIdxRef.current]?.thumbnail ?? "";
+    try {
+      c.discardActiveObject();
+      c.renderAll();
+      thumbnail = c.toDataURL({ format: "png", multiplier: 0.2 });
+    } catch { /* keep existing thumbnail on error */ }
+    return {
+      id: pagesRef.current[currentPageIdxRef.current]?.id ?? crypto.randomUUID(),
+      canvasJSON: JSON.stringify(c.toObject(["data"])),
+      bgColor: (c.backgroundColor as string) || "#ffffff",
+      thumbnail,
+    };
+  }, []);
+
+  const loadPageOntoCanvas = useCallback(async (page: Page) => {
+    const c = fabricRef.current;
+    if (!c) return;
+    isRestoringRef.current = true;
+    await c.loadFromJSON(JSON.parse(page.canvasJSON));
+    c.backgroundColor = page.bgColor;
+    c.renderAll();
+    isRestoringRef.current = false;
+    setBgColorState(page.bgColor);
+    setActiveObject(null);
+    historyRef.current = [page.canvasJSON];
+    histCursorRef.current = 0;
+    syncLayers();
+  }, [syncLayers]);
+
+  const switchToPage = useCallback(async (idx: number) => {
+    if (idx === currentPageIdxRef.current) return;
+    const captured = captureCurrentPage();
+    const newPages = [...pagesRef.current];
+    newPages[currentPageIdxRef.current] = captured;
+    await loadPageOntoCanvas(newPages[idx]);
+    pagesRef.current = newPages;
+    currentPageIdxRef.current = idx;
+    setPages([...newPages]);
+    setCurrentPageIdx(idx);
+  }, [captureCurrentPage, loadPageOntoCanvas]);
+
+  const addPage = useCallback(async () => {
+    const captured = captureCurrentPage();
+    const newPages = [...pagesRef.current];
+    newPages[currentPageIdxRef.current] = captured;
+    const newPage = makePage(EMPTY_CANVAS_JSON, "#ffffff");
+    newPages.push(newPage);
+    const newIdx = newPages.length - 1;
+    await loadPageOntoCanvas(newPage);
+    pagesRef.current = newPages;
+    currentPageIdxRef.current = newIdx;
+    setPages([...newPages]);
+    setCurrentPageIdx(newIdx);
+  }, [captureCurrentPage, loadPageOntoCanvas]);
+
+  const duplicatePage = useCallback(async (idx: number) => {
+    const captured = captureCurrentPage();
+    const newPages = [...pagesRef.current];
+    newPages[currentPageIdxRef.current] = captured;
+    const source = newPages[idx];
+    const dup = makePage(source.canvasJSON, source.bgColor, source.thumbnail);
+    newPages.splice(idx + 1, 0, dup);
+    const newIdx = idx + 1;
+    await loadPageOntoCanvas(dup);
+    pagesRef.current = newPages;
+    currentPageIdxRef.current = newIdx;
+    setPages([...newPages]);
+    setCurrentPageIdx(newIdx);
+  }, [captureCurrentPage, loadPageOntoCanvas]);
+
+  const deletePage = useCallback(async (idx: number) => {
+    if (pagesRef.current.length <= 1) return;
+    const newPages = [...pagesRef.current];
+    newPages.splice(idx, 1);
+    const newIdx = Math.min(idx, newPages.length - 1);
+    await loadPageOntoCanvas(newPages[newIdx]);
+    pagesRef.current = newPages;
+    currentPageIdxRef.current = newIdx;
+    setPages([...newPages]);
+    setCurrentPageIdx(newIdx);
+  }, [loadPageOntoCanvas]);
+
+  // ── Preview mode ─────────────────────────────────────────────────────────────
+
   const exitPreview = useCallback(() => {
     const c = fabricRef.current;
     if (!previewModeRef.current || !c) return;
@@ -98,6 +209,8 @@ export default function Editor() {
     setPreviewMode(false);
     c.renderAll();
   }, []);
+
+  // ── Undo / Redo ───────────────────────────────────────────────────────────────
 
   const undo = useCallback(async () => {
     exitPreview();
@@ -124,6 +237,8 @@ export default function Editor() {
     setActiveObject(null);
     syncLayers();
   }, [syncLayers, exitPreview]);
+
+  // ── Canvas / view controls ────────────────────────────────────────────────────
 
   const changeCanvasSize = useCallback((size: CanvasSize) => {
     const c = fabricRef.current;
@@ -193,12 +308,13 @@ export default function Editor() {
     }
   }, []);
 
+  // ── Group / Ungroup ───────────────────────────────────────────────────────────
+
   const groupSelected = useCallback(() => {
     const c = fabricRef.current;
     if (!c) return;
     const active = c.getActiveObject();
     if (!active || active.type !== "activeSelection") return;
-    // Capture objects before discarding the active selection
     const objects = (active as fabric.ActiveSelection).getObjects().slice();
     c.discardActiveObject();
     objects.forEach((obj) => c.remove(obj));
@@ -220,8 +336,7 @@ export default function Editor() {
     const objects = group.getObjects().slice();
     c.remove(group);
     for (const obj of objects) {
-      const objMatrix = obj.calcTransformMatrix();
-      const newMatrix = fabric.util.multiplyTransformMatrices(matrix, objMatrix);
+      const newMatrix = fabric.util.multiplyTransformMatrices(matrix, obj.calcTransformMatrix());
       const decomposed = fabric.util.qrDecompose(newMatrix);
       obj.set({
         scaleX: decomposed.scaleX,
@@ -245,79 +360,134 @@ export default function Editor() {
     saveSnapshot();
   }, [syncLayers, saveSnapshot]);
 
+  // ── Template save / load ──────────────────────────────────────────────────────
+
   const saveTemplate = useCallback(() => {
     const c = fabricRef.current;
     if (!c) return;
-    const json = JSON.stringify({ ...c.toObject(["data"]), _certgen: { canvasSize, bgColor } }, null, 2);
+    const captured = captureCurrentPage();
+    const allPages = [...pagesRef.current];
+    allPages[currentPageIdxRef.current] = captured;
+
+    const json = JSON.stringify(
+      {
+        _certgen: { canvasSize, version: 2 },
+        _pages: allPages.map((p) => ({
+          id: p.id,
+          bgColor: p.bgColor,
+          canvasJSON: JSON.parse(p.canvasJSON),
+        })),
+      },
+      null,
+      2
+    );
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const a = Object.assign(document.createElement("a"), {
-      href: url,
-      download: "certificate-template.json",
-    });
+    const a = Object.assign(document.createElement("a"), { href: url, download: "certificate-template.json" });
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [canvasSize, bgColor]);
+  }, [canvasSize, captureCurrentPage]);
 
-  const loadTemplate = useCallback(async (file: File) => {
+  const applyLoadedPages = useCallback(async (loadedPages: Page[], startIdx: number) => {
     const c = fabricRef.current;
     if (!c) return;
+    const first = loadedPages[startIdx];
+    isRestoringRef.current = true;
+    await c.loadFromJSON(JSON.parse(first.canvasJSON));
+    c.backgroundColor = first.bgColor;
+    c.renderAll();
+    isRestoringRef.current = false;
+    setBgColorState(first.bgColor);
+    setActiveObject(null);
+    setZoom(1);
+    zoomRef.current = 1;
+    historyRef.current = [first.canvasJSON];
+    histCursorRef.current = 0;
+    pagesRef.current = loadedPages;
+    currentPageIdxRef.current = startIdx;
+    setPages([...loadedPages]);
+    setCurrentPageIdx(startIdx);
+    syncLayers();
+  }, [syncLayers]);
+
+  // Appends template pages after existing pages instead of replacing them.
+  const appendLoadedPages = useCallback(async (newPages: Page[]) => {
+    const c = fabricRef.current;
+    if (!c) return;
+    const captured = captureCurrentPage();
+    const existing = [...pagesRef.current];
+    existing[currentPageIdxRef.current] = captured;
+    const merged = [...existing, ...newPages];
+    const newIdx = existing.length;
+    const first = newPages[0];
+    isRestoringRef.current = true;
+    await c.loadFromJSON(JSON.parse(first.canvasJSON));
+    c.backgroundColor = first.bgColor;
+    c.renderAll();
+    isRestoringRef.current = false;
+    setBgColorState(first.bgColor);
+    setActiveObject(null);
+    historyRef.current = [first.canvasJSON];
+    histCursorRef.current = 0;
+    pagesRef.current = merged;
+    currentPageIdxRef.current = newIdx;
+    setPages([...merged]);
+    setCurrentPageIdx(newIdx);
+    syncLayers();
+  }, [captureCurrentPage, syncLayers]);
+
+  const loadTemplate = useCallback(async (file: File) => {
     try {
       const text = await file.text();
       const json = JSON.parse(text);
-      if (json._certgen?.canvasSize) {
-        const s: CanvasSize = json._certgen.canvasSize;
-        c.setDimensions({ width: s.width, height: s.height });
-        setCanvasSizeState(s);
+      const c = fabricRef.current;
+      if (!c) return;
+
+      if (json._pages) {
+        const loadedPages: Page[] = (json._pages as Array<{ id: string; bgColor: string; canvasJSON: object }>).map(
+          (p) => makePage(JSON.stringify(p.canvasJSON), p.bgColor)
+        );
+        await appendLoadedPages(loadedPages);
+      } else {
+        const { _certgen: _, ...canvasJSON } = json as Record<string, unknown>;
+        const bg = (json._certgen as { bgColor?: string } | undefined)?.bgColor ?? "#ffffff";
+        await appendLoadedPages([makePage(JSON.stringify(canvasJSON), bg)]);
       }
-      if (json._certgen?.bgColor) {
-        c.backgroundColor = json._certgen.bgColor;
-        setBgColorState(json._certgen.bgColor);
-      }
-      const { _certgen: _, ...canvasJSON } = json;
-      await c.loadFromJSON(canvasJSON);
-      c.renderAll();
-      setActiveObject(null);
-      setZoom(1);
-      zoomRef.current = 1;
-      syncLayers();
-      saveSnapshot();
     } catch {
       alert("Could not load template — invalid JSON file.");
     }
-  }, [syncLayers, saveSnapshot]);
+  }, [appendLoadedPages]);
 
   const loadTemplateData = useCallback(async (json: Record<string, unknown>) => {
     const c = fabricRef.current;
     if (!c) return;
-    if (json._certgen && typeof json._certgen === "object") {
-      const meta = json._certgen as { canvasSize?: CanvasSize; bgColor?: string };
-      if (meta.canvasSize) {
-        const s = meta.canvasSize;
-        c.setDimensions({ width: s.width, height: s.height });
-        setCanvasSizeState(s);
-      }
-      if (meta.bgColor) {
-        c.backgroundColor = meta.bgColor;
-        setBgColorState(meta.bgColor);
-      }
-    }
-    const { _certgen: _, ...canvasJSON } = json;
-    await c.loadFromJSON(canvasJSON);
-    c.renderAll();
-    setActiveObject(null);
-    setZoom(1);
-    zoomRef.current = 1;
-    syncLayers();
-    saveSnapshot();
-  }, [syncLayers, saveSnapshot]);
 
-  const handleExportImage = useCallback(async (format: "png" | "jpeg") => {
-    const c = fabricRef.current;
-    if (c) await exportToImage(c, format);
-  }, []);
+    if (json._pages) {
+      const loadedPages: Page[] = (json._pages as Array<{ id: string; bgColor: string; canvasJSON: object }>).map(
+        (p) => makePage(JSON.stringify(p.canvasJSON), p.bgColor)
+      );
+      await appendLoadedPages(loadedPages);
+    } else {
+      const { _certgen: _, ...canvasJSON } = json;
+      const bg = (json._certgen as { bgColor?: string } | undefined)?.bgColor ?? "#ffffff";
+      await appendLoadedPages([makePage(JSON.stringify(canvasJSON), bg)]);
+    }
+  }, [appendLoadedPages]);
+
+  // ── Export ────────────────────────────────────────────────────────────────────
+
+  const openExportModal = useCallback(() => {
+    const captured = captureCurrentPage();
+    const allPages = [...pagesRef.current];
+    allPages[currentPageIdxRef.current] = captured;
+    pagesRef.current = allPages;
+    setExportPages([...allPages]);
+    setShowExport(true);
+  }, [captureCurrentPage]);
+
+  // ── Auto-save restore ─────────────────────────────────────────────────────────
 
   const restoreAutoSave = useCallback(async (record: AutoSaveRecord) => {
     const c = fabricRef.current;
@@ -326,36 +496,45 @@ export default function Editor() {
     const s = record.canvasSize;
     c.setDimensions({ width: s.width, height: s.height });
     setCanvasSizeState(s);
-    c.backgroundColor = record.bgColor;
-    setBgColorState(record.bgColor);
-    await c.loadFromJSON(JSON.parse(record.canvasJSON));
-    c.renderAll();
-    setActiveObject(null);
-    setZoom(1);
-    zoomRef.current = 1;
-    syncLayers();
-    saveSnapshot();
-  }, [syncLayers, saveSnapshot]);
 
-  // Auto-save every 30 seconds
+    let loadedPages: Page[];
+    if (record.pages) {
+      loadedPages = record.pages.map((p) => ({ ...p }));
+    } else {
+      // Legacy record
+      loadedPages = [makePage(record.canvasJSON ?? EMPTY_CANVAS_JSON, record.bgColor ?? "#ffffff")];
+    }
+    await applyLoadedPages(loadedPages, record.currentPageIdx ?? 0);
+  }, [applyLoadedPages]);
+
+  // ── Auto-save interval ────────────────────────────────────────────────────────
+
   useEffect(() => {
     if (!ready) return;
     const interval = setInterval(async () => {
       const c = fabricRef.current;
       if (!c || isRestoringRef.current || previewModeRef.current) return;
       try {
+        const captured = captureCurrentPage();
+        const allPages = [...pagesRef.current];
+        allPages[currentPageIdxRef.current] = captured;
+        pagesRef.current = allPages;
+        setPages([...allPages]);
+
         await autoSave(
-          JSON.stringify(c.toObject(["data"])),
-          canvasSize,
-          bgColor
+          allPages as SavedPage[],
+          currentPageIdxRef.current,
+          canvasSize
         );
         setLastSaved(new Date());
       } catch {
-        // silently ignore autosave failures
+        // silently ignore
       }
     }, 30_000);
     return () => clearInterval(interval);
-  }, [ready, canvasSize, bgColor]);
+  }, [ready, canvasSize, captureCurrentPage]);
+
+  // ── Canvas initialization ─────────────────────────────────────────────────────
 
   useEffect(() => {
     if (!canvasElRef.current) return;
@@ -370,7 +549,13 @@ export default function Editor() {
     fabricRef.current = canvas;
     setReady(true);
 
-    historyRef.current = [JSON.stringify(canvas.toObject(["data"]))];
+    // Initialize first page
+    const initialJSON = JSON.stringify(canvas.toObject(["data"]));
+    const initialPage: Page = makePage(initialJSON, "#ffffff");
+    pagesRef.current = [initialPage];
+    currentPageIdxRef.current = 0;
+    setPages([initialPage]);
+    historyRef.current = [initialJSON];
     histCursorRef.current = 0;
 
     // Check for auto-save on mount
@@ -393,7 +578,7 @@ export default function Editor() {
     canvas.on("object:modified", saveSnapshot);
     canvas.on("text:changed", saveSnapshot);
 
-    // --- Alignment guides ---
+    // ── Alignment guides ─────────────────────────────────────────────────────
     const guides = { h: [] as number[], v: [] as number[] };
     const SNAP = 8;
 
@@ -453,12 +638,8 @@ export default function Editor() {
       ctx.strokeStyle = "#e83e8c";
       ctx.lineWidth = 1;
       ctx.setLineDash([]);
-      for (const y of guides.h) {
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cw, y); ctx.stroke();
-      }
-      for (const x of guides.v) {
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ch); ctx.stroke();
-      }
+      for (const y of guides.h) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cw, y); ctx.stroke(); }
+      for (const x of guides.v) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ch); ctx.stroke(); }
       ctx.restore();
     });
 
@@ -476,14 +657,10 @@ export default function Editor() {
       const target = e.target as HTMLElement;
       const isEditing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
-      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
-        e.preventDefault(); undo(); return;
-      }
-      if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
-        e.preventDefault(); redo(); return;
-      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) { e.preventDefault(); undo(); return; }
+      if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); redo(); return; }
 
-      // Group: Ctrl+G (toggle group/ungroup)
+      // Group: Ctrl+G
       if ((e.metaKey || e.ctrlKey) && e.key === "g" && !e.shiftKey && !isEditing) {
         e.preventDefault();
         const active = canvas.getActiveObject();
@@ -492,11 +669,7 @@ export default function Editor() {
           canvas.discardActiveObject();
           objects.forEach((obj) => canvas.remove(obj));
           const group = new fabric.Group(objects);
-          canvas.add(group);
-          canvas.setActiveObject(group);
-          canvas.renderAll();
-          syncLayers();
-          saveSnapshot();
+          canvas.add(group); canvas.setActiveObject(group); canvas.renderAll(); syncLayers(); saveSnapshot();
         } else if (active?.type === "group") {
           const group = active as fabric.Group;
           const matrix = group.calcTransformMatrix();
@@ -507,14 +680,10 @@ export default function Editor() {
             const decomposed = fabric.util.qrDecompose(newMatrix);
             obj.set({ scaleX: decomposed.scaleX, scaleY: decomposed.scaleY, skewX: decomposed.skewX, skewY: decomposed.skewY, angle: decomposed.angle });
             obj.setPositionByOrigin(new fabric.Point(decomposed.translateX, decomposed.translateY), "center", "center");
-            obj.setCoords();
-            canvas.add(obj);
+            obj.setCoords(); canvas.add(obj);
           }
           const sel = new fabric.ActiveSelection(objects, { canvas });
-          canvas.setActiveObject(sel);
-          canvas.renderAll();
-          syncLayers();
-          saveSnapshot();
+          canvas.setActiveObject(sel); canvas.renderAll(); syncLayers(); saveSnapshot();
         }
         return;
       }
@@ -537,37 +706,18 @@ export default function Editor() {
           const newTop = (clipboardRef.current!.top ?? 0) + 20;
           pasted.set({ left: newLeft, top: newTop, evented: true });
           clipboardRef.current!.set({ left: newLeft, top: newTop });
-          canvas.add(pasted);
-          canvas.setActiveObject(pasted);
-          canvas.renderAll();
+          canvas.add(pasted); canvas.setActiveObject(pasted); canvas.renderAll();
         });
         return;
       }
 
-      // Zoom keyboard shortcuts
-      if ((e.metaKey || e.ctrlKey) && e.key === "=" && !isEditing) {
-        e.preventDefault();
-        const next = Math.min(MAX_ZOOM, zoomRef.current + 0.1);
-        setZoom(next); zoomRef.current = next; return;
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "-" && !isEditing) {
-        e.preventDefault();
-        const next = Math.max(MIN_ZOOM, zoomRef.current - 0.1);
-        setZoom(next); zoomRef.current = next; return;
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "0" && !isEditing) {
-        e.preventDefault();
-        setZoom(1); zoomRef.current = 1; return;
-      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "=" && !isEditing) { e.preventDefault(); const next = Math.min(MAX_ZOOM, zoomRef.current + 0.1); setZoom(next); zoomRef.current = next; return; }
+      if ((e.metaKey || e.ctrlKey) && e.key === "-" && !isEditing) { e.preventDefault(); const next = Math.max(MIN_ZOOM, zoomRef.current - 0.1); setZoom(next); zoomRef.current = next; return; }
+      if ((e.metaKey || e.ctrlKey) && e.key === "0" && !isEditing) { e.preventDefault(); setZoom(1); zoomRef.current = 1; return; }
 
       if ((e.key === "Delete" || e.key === "Backspace") && !isEditing) {
         const obj = canvas.getActiveObject();
-        if (obj) {
-          canvas.remove(obj);
-          canvas.discardActiveObject();
-          canvas.renderAll();
-          setActiveObject(null);
-        }
+        if (obj) { canvas.remove(obj); canvas.discardActiveObject(); canvas.renderAll(); setActiveObject(null); }
       }
 
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key) && !isEditing) {
@@ -578,11 +728,9 @@ export default function Editor() {
         const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
         const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
         obj.set({ left: (obj.left ?? 0) + dx, top: (obj.top ?? 0) + dy });
-        obj.setCoords();
-        canvas.renderAll();
+        obj.setCoords(); canvas.renderAll();
         clearTimeout((handleKey as unknown as { _t?: ReturnType<typeof setTimeout> })._t);
-        (handleKey as unknown as { _t?: ReturnType<typeof setTimeout> })._t =
-          setTimeout(() => saveSnapshot(), 400);
+        (handleKey as unknown as { _t?: ReturnType<typeof setTimeout> })._t = setTimeout(() => saveSnapshot(), 400);
       }
     };
 
@@ -596,7 +744,8 @@ export default function Editor() {
     };
   }, [syncLayers, saveSnapshot, undo, redo]);
 
-  // Ctrl+scroll zoom handler
+  // ── Ctrl+scroll zoom ──────────────────────────────────────────────────────────
+
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
@@ -626,7 +775,7 @@ export default function Editor() {
         activeObject={activeObject}
         onGroupSelected={groupSelected}
         onUngroupSelected={ungroupSelected}
-        onExportImage={handleExportImage}
+        onOpenExport={openExportModal}
         onSaveTemplate={saveTemplate}
         onLoadTemplate={loadTemplate}
         onOpenBulk={() => setShowBulk(true)}
@@ -638,26 +787,15 @@ export default function Editor() {
       {autoSaveRestore && (
         <div className="flex items-center gap-3 px-4 py-2 bg-blue-50 border-b border-blue-200 text-sm text-blue-800 flex-shrink-0">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-            <circle cx="7" cy="7" r="6" />
-            <path d="M7 4v3l2 1.5" />
+            <circle cx="7" cy="7" r="6" /><path d="M7 4v3l2 1.5" />
           </svg>
           <span>
-            Auto-save found from{" "}
-            <strong>{new Date(autoSaveRestore.savedAt).toLocaleTimeString()}</strong>
+            Auto-save found from <strong>{new Date(autoSaveRestore.savedAt).toLocaleTimeString()}</strong>
+            {(autoSaveRestore.pages?.length ?? 1) > 1 && ` (${autoSaveRestore.pages!.length} pages)`}
             {" "}— restore it?
           </span>
-          <button
-            onClick={() => restoreAutoSave(autoSaveRestore)}
-            className="px-3 py-1 bg-blue-600 text-white rounded-md text-xs hover:bg-blue-700 transition-colors"
-          >
-            Restore
-          </button>
-          <button
-            onClick={() => setAutoSaveRestore(null)}
-            className="px-3 py-1 bg-blue-100 text-blue-700 rounded-md text-xs hover:bg-blue-200 transition-colors"
-          >
-            Dismiss
-          </button>
+          <button onClick={() => restoreAutoSave(autoSaveRestore)} className="px-3 py-1 bg-blue-600 text-white rounded-md text-xs hover:bg-blue-700 transition-colors">Restore</button>
+          <button onClick={() => setAutoSaveRestore(null)} className="px-3 py-1 bg-blue-100 text-blue-700 rounded-md text-xs hover:bg-blue-200 transition-colors">Dismiss</button>
         </div>
       )}
 
@@ -665,25 +803,18 @@ export default function Editor() {
       {previewMode && (
         <div className="flex items-center justify-center gap-2 px-4 py-1.5 bg-amber-50 border-b border-amber-200 text-xs text-amber-700 flex-shrink-0">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <circle cx="6" cy="6" r="5" />
-            <circle cx="6" cy="6" r="2" fill="currentColor" stroke="none" />
+            <circle cx="6" cy="6" r="5" /><circle cx="6" cy="6" r="2" fill="currentColor" stroke="none" />
           </svg>
           Preview mode — variables replaced with sample data. Edits and auto-save are paused.
-          <button
-            onClick={togglePreviewMode}
-            className="ml-2 underline hover:no-underline"
-          >
-            Exit
-          </button>
+          <button onClick={togglePreviewMode} className="ml-2 underline hover:no-underline">Exit</button>
         </div>
       )}
 
-      {/* Toast for no-variables feedback */}
+      {/* No-variables toast */}
       {previewToast && (
         <div className="flex items-center justify-center gap-2 px-4 py-1.5 bg-orange-50 border-b border-orange-200 text-xs text-orange-700 flex-shrink-0">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <circle cx="6" cy="6" r="5" />
-            <path d="M6 4v3M6 8.5v.5" strokeLinecap="round" />
+            <circle cx="6" cy="6" r="5" /><path d="M6 4v3M6 8.5v.5" strokeLinecap="round" />
           </svg>
           {previewToast}
         </div>
@@ -699,17 +830,29 @@ export default function Editor() {
           saveSnapshot={saveSnapshot}
         />
 
-        <div
-          className="flex-1 min-w-0 overflow-hidden bg-gray-300 flex items-center justify-center"
-          onWheel={handleWheel}
-        >
-          {/* CSS-transform zoom — does NOT change canvas data dimensions, so export is unaffected */}
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          {/* Canvas area */}
           <div
-            style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
-            className="shadow-2xl ring-1 ring-black/10 flex-shrink-0"
+            className="flex-1 min-w-0 overflow-hidden bg-gray-300 flex items-center justify-center"
+            onWheel={handleWheel}
           >
-            <canvas ref={canvasElRef} />
+            <div
+              style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
+              className="shadow-2xl ring-1 ring-black/10 flex-shrink-0"
+            >
+              <canvas ref={canvasElRef} />
+            </div>
           </div>
+
+          {/* Pages strip */}
+          <PagesPanel
+            pages={pages}
+            currentIdx={currentPageIdx}
+            onSelect={switchToPage}
+            onAdd={addPage}
+            onDuplicate={duplicatePage}
+            onDelete={deletePage}
+          />
         </div>
 
         <PropertiesPanel
@@ -720,9 +863,16 @@ export default function Editor() {
         />
       </div>
 
-      {showBulk && (
-        <BulkExportModal fabricRef={fabricRef} onClose={() => setShowBulk(false)} />
+      {showExport && (
+        <ExportModal
+          pages={exportPages}
+          currentPageIdx={currentPageIdx}
+          canvasSize={canvasSize}
+          onClose={() => setShowExport(false)}
+        />
       )}
+
+      {showBulk && <BulkExportModal fabricRef={fabricRef} onClose={() => setShowBulk(false)} />}
 
       {showTemplates && (
         <TemplatesModal

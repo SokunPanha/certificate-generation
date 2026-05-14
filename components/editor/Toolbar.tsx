@@ -4,7 +4,6 @@ import { useRef, useState, useEffect, RefObject, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import * as fabric from "fabric";
 import type { Canvas, Image as FabricImage, Object as FabricObject } from "fabric";
-import { exportToPDF } from "@/lib/exportPDF";
 import { CANVAS_SIZES, type CanvasSize } from "./Editor";
 import { HexColorPicker } from "react-colorful";
 
@@ -31,7 +30,7 @@ interface Props {
   activeObject: FabricObject | null;
   onGroupSelected: () => void;
   onUngroupSelected: () => void;
-  onExportImage: (format: "png" | "jpeg") => void;
+  onOpenExport: () => void;
   onSaveTemplate: () => void;
   onLoadTemplate: (file: File) => Promise<void>;
   onOpenBulk: () => void;
@@ -135,7 +134,7 @@ export default function Toolbar({
   zoom, onZoomChange,
   previewMode, onPreviewToggle,
   activeObject, onGroupSelected, onUngroupSelected,
-  onExportImage,
+  onOpenExport,
   onSaveTemplate, onLoadTemplate, onOpenBulk, onOpenTemplates,
   lastSaved,
 }: Props) {
@@ -148,7 +147,6 @@ export default function Toolbar({
   const [sizesPos,  setSizesPos]  = useState<PopoverPos>(null);
   const [shapesPos, setShapesPos] = useState<PopoverPos>(null);
   const [bgPos,     setBgPos]     = useState<PopoverPos>(null);
-  const [exportPos, setExportPos] = useState<PopoverPos>(null);
   const [qrPos,     setQrPos]     = useState<PopoverPos>(null);
   const [qrUrl,     setQrUrl]     = useState("https://");
   const [qrLoading, setQrLoading] = useState(false);
@@ -161,16 +159,16 @@ export default function Toolbar({
 
   const closeAll = () => {
     setVarsPos(null); setSizesPos(null); setShapesPos(null);
-    setBgPos(null); setExportPos(null); setQrPos(null);
+    setBgPos(null); setQrPos(null);
   };
 
   useEffect(() => {
-    const anyOpen = varsPos || sizesPos || shapesPos || bgPos || exportPos || qrPos;
+    const anyOpen = varsPos || sizesPos || shapesPos || bgPos || qrPos;
     if (!anyOpen) return;
     const close = () => closeAll();
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
-  }, [varsPos, sizesPos, shapesPos, bgPos, exportPos, qrPos]);
+  }, [varsPos, sizesPos, shapesPos, bgPos, qrPos]);
 
   const openPopover = (cur: PopoverPos, set: (p: PopoverPos) => void, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -240,9 +238,14 @@ export default function Toolbar({
   };
 
   const loadImg = async (file: File, cb: (img: FabricImage) => void) => {
-    const url = URL.createObjectURL(file);
-    const img = await fabric.Image.fromURL(url);
-    cb(img); URL.revokeObjectURL(url);
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target!.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const img = await fabric.Image.fromURL(dataUrl);
+    cb(img);
   };
 
   const handleFrame = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -292,7 +295,6 @@ export default function Toolbar({
     syncLayers(); saveSnapshot();
   };
 
-  const handleExportPDF = async () => { const canvas = c(); if (canvas) await exportToPDF(canvas); closeAll(); };
   const handleLoadTemplate = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (file) await onLoadTemplate(file); e.target.value = "";
   };
@@ -480,12 +482,7 @@ export default function Toolbar({
 
         {/* ── Export ── */}
         <RibbonGroup label="Export">
-          <RibbonDropBtn
-            icon={icons.export} label="Export"
-            onClick={(e) => openPopover(exportPos, setExportPos, e)}
-            disabled={!ready} open={!!exportPos}
-            color="green"
-          />
+          <RibbonBtn icon={icons.export} label="Export" onClick={onOpenExport} disabled={!ready} color="green" title="Export pages (PDF / PNG / JPG)" />
           <RibbonBtn icon={icons.bulk} label="Bulk" onClick={onOpenBulk} disabled={!ready} color="blue" title="Bulk certificate generation" />
         </RibbonGroup>
 
@@ -600,23 +597,6 @@ export default function Toolbar({
         </div>, document.body
       )}
 
-      {/* Export dropdown */}
-      {exportPos && createPortal(
-        <div onMouseDown={(e) => e.stopPropagation()}
-          style={{ position: "fixed", top: exportPos.top, left: exportPos.left, zIndex: 9999 }}
-          className="bg-white rounded-xl shadow-2xl border border-gray-100 py-1 w-40"
-        >
-          {[
-            { label: "Export as PDF",  action: handleExportPDF },
-            { label: "Export as PNG",  action: () => { onExportImage("png");  closeAll(); } },
-            { label: "Export as JPG",  action: () => { onExportImage("jpeg"); closeAll(); } },
-          ].map(({ label, action }) => (
-            <button key={label} onClick={action}
-              className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-            >{label}</button>
-          ))}
-        </div>, document.body
-      )}
     </header>
   );
 }

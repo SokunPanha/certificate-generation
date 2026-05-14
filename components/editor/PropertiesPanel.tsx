@@ -53,20 +53,6 @@ export default function PropertiesPanel({ activeObject, fabricRef, bgColor, onBg
     }
   }, [activeObject]);
 
-  const render = useCallback(() => {
-    fabricRef.current?.renderAll();
-  }, [fabricRef]);
-
-  const applyProp = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (props: Record<string, any>) => {
-      if (!activeObject) return;
-      activeObject.set(props);
-      render();
-    },
-    [activeObject, render]
-  );
-
   const handleFont = async (family: string) => {
     setFontFamily(family);
     await loadFont(family);
@@ -82,40 +68,54 @@ export default function PropertiesPanel({ activeObject, fabricRef, bgColor, onBg
 
   const handleSize = (size: number) => {
     setFontSize(size);
-    applyProp({ fontSize: size });
+    if (!activeObject) return;
+    activeObject.set({ fontSize: size });
+    fabricRef.current?.renderAll();
   };
 
   const handleBold = () => {
     const next = !bold;
     setBold(next);
-    applyProp({ fontWeight: next ? "bold" : "normal" });
+    if (!activeObject) return;
+    activeObject.set({ fontWeight: next ? "bold" : "normal" });
+    fabricRef.current?.renderAll();
   };
 
   const handleItalic = () => {
     const next = !italic;
     setItalic(next);
-    applyProp({ fontStyle: next ? "italic" : "normal" });
+    if (!activeObject) return;
+    activeObject.set({ fontStyle: next ? "italic" : "normal" });
+    fabricRef.current?.renderAll();
   };
 
   const handleUnderline = () => {
     const next = !underline;
     setUnderline(next);
-    applyProp({ underline: next });
+    if (!activeObject) return;
+    activeObject.set({ underline: next });
+    fabricRef.current?.renderAll();
   };
 
   const handleColor = (c: string) => {
     setColor(c);
-    applyProp({ fill: c });
+    if (!activeObject) return;
+    activeObject.set({ fill: c });
+    fabricRef.current?.renderAll();
   };
 
   const handleAlign = (align: "left" | "center" | "right") => {
     setTextAlign(align);
-    applyProp({ textAlign: align });
+    if (!activeObject) return;
+    activeObject.set({ textAlign: align });
+    fabricRef.current?.renderAll();
   };
 
   const handleOpacity = (val: number) => {
     setOpacity(val);
-    applyProp({ opacity: val / 100 });
+    if (!activeObject) return;
+    activeObject.set({ opacity: val / 100 });
+    fabricRef.current?.renderAll();
   };
 
   const isWatermark =

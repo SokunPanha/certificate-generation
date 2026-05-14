@@ -2,12 +2,22 @@ const DB_NAME = "cert-gen-autosave";
 const STORE = "state";
 const KEY = "current";
 
-export interface AutoSaveRecord {
+export interface SavedPage {
   id: string;
   canvasJSON: string;
-  canvasSize: { label: string; width: number; height: number };
   bgColor: string;
+  thumbnail: string;
+}
+
+export interface AutoSaveRecord {
+  id: string;
   savedAt: number;
+  canvasSize: { label: string; width: number; height: number };
+  pages: SavedPage[];
+  currentPageIdx: number;
+  // Legacy single-page fields (for reading old records)
+  canvasJSON?: string;
+  bgColor?: string;
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -25,12 +35,12 @@ function openDB(): Promise<IDBDatabase> {
 }
 
 export async function autoSave(
-  canvasJSON: string,
-  canvasSize: AutoSaveRecord["canvasSize"],
-  bgColor: string
+  pages: SavedPage[],
+  currentPageIdx: number,
+  canvasSize: AutoSaveRecord["canvasSize"]
 ): Promise<void> {
   const db = await openDB();
-  const record: AutoSaveRecord = { id: KEY, canvasJSON, canvasSize, bgColor, savedAt: Date.now() };
+  const record: AutoSaveRecord = { id: KEY, savedAt: Date.now(), canvasSize, pages, currentPageIdx };
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
     const req = tx.objectStore(STORE).put(record);
