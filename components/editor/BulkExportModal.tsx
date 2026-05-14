@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useRef, RefObject } from "react";
-import type { Canvas, Textbox } from "fabric";
+import { useState, useRef } from "react";
 import { bulkExport, renderRow, type BulkProgress, type ExportMode } from "@/lib/bulkExport";
+import type { CanvasSize } from "./Editor";
 
 interface Props {
-  fabricRef: RefObject<Canvas | null>;
+  templateJSON: object;
+  canvasSize: CanvasSize;
   onClose: () => void;
 }
 
@@ -29,14 +30,11 @@ function getSample(varName: string, rowIdx: number): string {
   return values ? values[rowIdx % values.length] : `${varName}_${rowIdx + 1}`;
 }
 
-function extractVarsFromCanvas(canvas: Canvas): string[] {
+function extractVarsFromJSON(templateJSON: object): string[] {
   const found = new Set<string>();
   const RE = /\{\{(\w+)\}\}/g;
-  for (const obj of canvas.getObjects()) {
-    if (["textbox", "text", "i-text"].includes(obj.type ?? "")) {
-      for (const m of ((obj as Textbox).text ?? "").matchAll(RE)) found.add(m[1]);
-    }
-  }
+  const str = JSON.stringify(templateJSON);
+  for (const m of str.matchAll(RE)) found.add(m[1]);
   return [...found];
 }
 
@@ -68,7 +66,7 @@ async function parseXLSX(file: File): Promise<{ headers: string[]; rows: Record<
   return { headers, rows };
 }
 
-export default function BulkExportModal({ fabricRef, onClose }: Props) {
+export default function BulkExportModal({ templateJSON, canvasSize, onClose }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<Record<string, string>[]>([]);
@@ -79,7 +77,7 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
   const [previewDataURL, setPreviewDataURL] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  const canvasVars = fabricRef.current ? extractVarsFromCanvas(fabricRef.current) : [];
+  const canvasVars = extractVarsFromJSON(templateJSON);
   const hasVars = canvasVars.length > 0;
 
   const handleDownloadSample = async () => {
@@ -106,14 +104,12 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
   };
 
   const handlePreviewRow = async () => {
-    const c = fabricRef.current;
-    if (!c || !rows.length) return;
+    if (!rows.length) return;
     setPreviewLoading(true);
     setPreviewDataURL(null);
     try {
       const fabric = await import("fabric");
-      const templateStr = JSON.stringify(c.toObject(["data"]));
-      const dataURL = await renderRow(fabric, templateStr, rows[0], c.getWidth(), c.getHeight());
+      const dataURL = await renderRow(fabric, JSON.stringify(templateJSON), rows[0], canvasSize.width, canvasSize.height);
       setPreviewDataURL(dataURL);
     } catch (err) {
       setError(String(err));
@@ -123,13 +119,12 @@ export default function BulkExportModal({ fabricRef, onClose }: Props) {
   };
 
   const handleGenerate = async () => {
-    const c = fabricRef.current;
-    if (!c || !rows.length) return;
+    if (!rows.length) return;
     setError("");
     setDone(false);
     setProgress({ current: 0, total: rows.length, label: "Starting…" });
     try {
-      await bulkExport(mode, c.toObject(["data"]), rows, c.getWidth(), c.getHeight(), setProgress);
+      await bulkExport(mode, templateJSON, rows, canvasSize.width, canvasSize.height, setProgress);
       setDone(true);
     } catch (err) {
       setError(String(err));

@@ -79,7 +79,12 @@ export default function Editor() {
   const previewModeRef = useRef(false);
   const previewOriginalsRef = useRef<Map<FabricObject, string>>(new Map());
   const [previewToast, setPreviewToast] = useState<string | null>(null);
+  const xlsxRowsRef = useRef<Record<string, string>[] | null>(null);
+  const xlsxRowIdxRef = useRef(0);
+  const [xlsxRows, setXlsxRows] = useState<Record<string, string>[] | null>(null);
+  const [xlsxRowIdx, setXlsxRowIdx] = useState(0);
   const [showBulk, setShowBulk] = useState(false);
+  const [bulkTemplateJSON, setBulkTemplateJSON] = useState<object>({});
   const [showTemplates, setShowTemplates] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [exportPages, setExportPages] = useState<Page[]>([]);
@@ -196,6 +201,26 @@ export default function Editor() {
 
   // ── Preview mode ─────────────────────────────────────────────────────────────
 
+  const applyDataToCanvas = useCallback((data: Record<string, string>) => {
+    const c = fabricRef.current;
+    if (!c) return new Map<FabricObject, string>();
+    const originals = new Map<FabricObject, string>();
+    isRestoringRef.current = true;
+    c.getObjects().forEach((obj) => {
+      if (obj.type === "textbox" || obj.type === "i-text" || obj.type === "text") {
+        const tb = obj as Textbox;
+        const original = tb.text ?? "";
+        const filled = original.replace(/\{\{(\w+)\}\}/g, (_, v) => data[v] ?? `{{${v}}}`);
+        if (filled !== original) {
+          originals.set(obj, original);
+          tb.set({ text: filled });
+        }
+      }
+    });
+    isRestoringRef.current = false;
+    return originals;
+  }, []);
+
   const exitPreview = useCallback(() => {
     const c = fabricRef.current;
     if (!previewModeRef.current || !c) return;
@@ -271,21 +296,8 @@ export default function Editor() {
     if (!c) return;
 
     if (!previewModeRef.current) {
-      const originals = new Map<FabricObject, string>();
-      isRestoringRef.current = true;
-      c.getObjects().forEach((obj) => {
-        if (obj.type === "textbox" || obj.type === "i-text" || obj.type === "text") {
-          const tb = obj as Textbox;
-          const original = tb.text ?? "";
-          const filled = original.replace(/\{\{(\w+)\}\}/g, (_, v) => PREVIEW_DATA[v] ?? `{{${v}}}`);
-          if (filled !== original) {
-            originals.set(obj, original);
-            tb.set({ text: filled });
-          }
-        }
-      });
-      isRestoringRef.current = false;
-      previewOriginalsRef.current = originals;
+      const data = xlsxRowsRef.current?.[xlsxRowIdxRef.current] ?? PREVIEW_DATA;
+      const originals = applyDataToCanvas(data);
       c.renderAll();
 
       if (originals.size === 0) {
@@ -293,6 +305,7 @@ export default function Editor() {
         setTimeout(() => setPreviewToast(null), 4000);
         return;
       }
+      previewOriginalsRef.current = originals;
       previewModeRef.current = true;
       setPreviewMode(true);
     } else {
@@ -306,7 +319,47 @@ export default function Editor() {
       previewModeRef.current = false;
       setPreviewMode(false);
     }
-  }, []);
+  }, [applyDataToCanvas]);
+
+  const handleXlsxLoad = useCallback((rows: Record<string, string>[]) => {
+    xlsxRowsRef.current = rows;
+    xlsxRowIdxRef.current = 0;
+    setXlsxRows(rows);
+    setXlsxRowIdx(0);
+    if (previewModeRef.current) {
+      const c = fabricRef.current;
+      if (!c) return;
+      isRestoringRef.current = true;
+      previewOriginalsRef.current.forEach((originalText, obj) => {
+        (obj as Textbox).set({ text: originalText });
+      });
+      isRestoringRef.current = false;
+      previewOriginalsRef.current.clear();
+      const originals = applyDataToCanvas(rows[0]);
+      previewOriginalsRef.current = originals;
+      c.renderAll();
+    }
+  }, [applyDataToCanvas]);
+
+  const changeXlsxRow = useCallback((idx: number) => {
+    const rows = xlsxRowsRef.current;
+    if (!rows) return;
+    const clamped = Math.max(0, Math.min(rows.length - 1, idx));
+    xlsxRowIdxRef.current = clamped;
+    setXlsxRowIdx(clamped);
+    if (!previewModeRef.current) return;
+    const c = fabricRef.current;
+    if (!c) return;
+    isRestoringRef.current = true;
+    previewOriginalsRef.current.forEach((originalText, obj) => {
+      (obj as Textbox).set({ text: originalText });
+    });
+    isRestoringRef.current = false;
+    previewOriginalsRef.current.clear();
+    const originals = applyDataToCanvas(rows[clamped]);
+    previewOriginalsRef.current = originals;
+    c.renderAll();
+  }, [applyDataToCanvas]);
 
   // ── Group / Ungroup ───────────────────────────────────────────────────────────
 
@@ -772,13 +825,21 @@ export default function Editor() {
         onZoomChange={changeZoom}
         previewMode={previewMode}
         onPreviewToggle={togglePreviewMode}
+        xlsxRows={xlsxRows}
+        xlsxRowIdx={xlsxRowIdx}
+        onXlsxLoad={handleXlsxLoad}
         activeObject={activeObject}
         onGroupSelected={groupSelected}
         onUngroupSelected={ungroupSelected}
         onOpenExport={openExportModal}
         onSaveTemplate={saveTemplate}
         onLoadTemplate={loadTemplate}
-        onOpenBulk={() => setShowBulk(true)}
+        onOpenBulk={() => {
+          if (previewModeRef.current) exitPreview();
+          const c = fabricRef.current;
+          setBulkTemplateJSON(c ? c.toObject(["data"]) : {});
+          setShowBulk(true);
+        }}
         onOpenTemplates={() => setShowTemplates(true)}
         lastSaved={lastSaved}
       />
@@ -805,7 +866,25 @@ export default function Editor() {
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
             <circle cx="6" cy="6" r="5" /><circle cx="6" cy="6" r="2" fill="currentColor" stroke="none" />
           </svg>
-          Preview mode — variables replaced with sample data. Edits and auto-save are paused.
+          {xlsxRows ? (
+            <>
+              Preview — row {xlsxRowIdx + 1} of {xlsxRows.length}
+              <button
+                onClick={() => changeXlsxRow(xlsxRowIdx - 1)}
+                disabled={xlsxRowIdx === 0}
+                className="w-5 h-5 flex items-center justify-center rounded hover:bg-amber-200 disabled:opacity-30 transition-colors font-bold text-sm"
+                title="Previous row"
+              >‹</button>
+              <button
+                onClick={() => changeXlsxRow(xlsxRowIdx + 1)}
+                disabled={xlsxRowIdx >= xlsxRows.length - 1}
+                className="w-5 h-5 flex items-center justify-center rounded hover:bg-amber-200 disabled:opacity-30 transition-colors font-bold text-sm"
+                title="Next row"
+              >›</button>
+            </>
+          ) : (
+            <>Preview mode — variables replaced with sample data. Edits and auto-save are paused.</>
+          )}
           <button onClick={togglePreviewMode} className="ml-2 underline hover:no-underline">Exit</button>
         </div>
       )}
@@ -872,7 +951,13 @@ export default function Editor() {
         />
       )}
 
-      {showBulk && <BulkExportModal fabricRef={fabricRef} onClose={() => setShowBulk(false)} />}
+      {showBulk && (
+        <BulkExportModal
+          templateJSON={bulkTemplateJSON}
+          canvasSize={canvasSize}
+          onClose={() => setShowBulk(false)}
+        />
+      )}
 
       {showTemplates && (
         <TemplatesModal

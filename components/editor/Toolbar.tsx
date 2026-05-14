@@ -27,6 +27,9 @@ interface Props {
   onZoomChange: (z: number) => void;
   previewMode: boolean;
   onPreviewToggle: () => void;
+  xlsxRows: Record<string, string>[] | null;
+  xlsxRowIdx: number;
+  onXlsxLoad: (rows: Record<string, string>[]) => void;
   activeObject: FabricObject | null;
   onGroupSelected: () => void;
   onUngroupSelected: () => void;
@@ -126,6 +129,18 @@ function timeSince(date: Date): string {
 
 // ── Main component ───────────────────────────────────────────────────────────
 
+async function parseXLSX(file: File): Promise<Record<string, string>[]> {
+  const XLSX = await import("xlsx");
+  const buffer = await file.arrayBuffer();
+  const wb = XLSX.read(buffer, { type: "array" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { raw: false, defval: "" });
+  const headers = raw.length ? Object.keys(raw[0]) : [];
+  return raw.map((r) =>
+    Object.fromEntries(headers.map((h) => [h, String(r[h] ?? "")])) as Record<string, string>
+  );
+}
+
 export default function Toolbar({
   fabricRef, ready, syncLayers, saveSnapshot,
   undo, redo,
@@ -133,6 +148,7 @@ export default function Toolbar({
   bgColor, onBgColorChange,
   zoom, onZoomChange,
   previewMode, onPreviewToggle,
+  xlsxRows, xlsxRowIdx, onXlsxLoad,
   activeObject, onGroupSelected, onUngroupSelected,
   onOpenExport,
   onSaveTemplate, onLoadTemplate, onOpenBulk, onOpenTemplates,
@@ -142,6 +158,7 @@ export default function Toolbar({
   const watermarkRef = useRef<HTMLInputElement>(null);
   const imageRef    = useRef<HTMLInputElement>(null);
   const templateRef = useRef<HTMLInputElement>(null);
+  const xlsxRef     = useRef<HTMLInputElement>(null);
 
   const [varsPos,   setVarsPos]   = useState<PopoverPos>(null);
   const [sizesPos,  setSizesPos]  = useState<PopoverPos>(null);
@@ -288,6 +305,16 @@ export default function Toolbar({
     e.target.value = "";
   };
 
+  const handleXlsxUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const rows = await parseXLSX(file);
+      if (rows.length) onXlsxLoad(rows);
+    } catch { /* ignore invalid files */ }
+    e.target.value = "";
+  };
+
   const handleClear = () => {
     const canvas = c(); if (!canvas) return;
     if (!confirm("Clear all elements from the canvas?")) return;
@@ -315,6 +342,7 @@ export default function Toolbar({
     frame:     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="w-5 h-5"><rect x="1" y="1" width="14" height="14" rx="1"/><rect x="4" y="4" width="8" height="8" rx="0.5"/></svg>,
     watermark: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="w-5 h-5"><path d="M8 1.5S4 6 4 9.5a4 4 0 008 0C12 6 8 1.5 8 1.5z"/></svg>,
     variable:  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="w-5 h-5"><path d="M5 4L2 8l3 4M11 4l3 4-3 4M9 3l-2 10"/></svg>,
+    xlsx:      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="w-5 h-5"><rect x="1" y="2" width="14" height="12" rx="1.2"/><path d="M1 6h14"/><path d="M5.5 9.5l1.5 2M7 9.5l-1.5 2M9 9.5v2M9 9.5h2M9 11h1.5" strokeLinejoin="round"/></svg>,
     preview:   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="w-5 h-5"><ellipse cx="8" cy="8" rx="7" ry="5"/><circle cx="8" cy="8" r="2.5" fill="currentColor" stroke="none"/></svg>,
     size:      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="w-5 h-5"><rect x="1" y="3" width="14" height="10" rx="1"/><path d="M4 7h8M4 10h5" strokeLinecap="round"/></svg>,
     bg:        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="w-5 h-5"><rect x="1" y="1" width="14" height="14" rx="1.5"/><rect x="3" y="3" width="10" height="10" rx="0.5" fill="currentColor" opacity="0.15" stroke="none"/></svg>,
@@ -384,8 +412,22 @@ export default function Toolbar({
             icon={icons.preview} label="Preview"
             onClick={onPreviewToggle} disabled={!ready}
             active={previewMode} color="amber"
-            title="Preview variables with sample data"
+            title={xlsxRows ? `Preview with real data (${xlsxRows.length} rows, row ${xlsxRowIdx + 1})` : "Preview variables with sample data"}
           />
+          <div className="relative">
+            <RibbonBtn
+              icon={icons.xlsx} label="Data"
+              onClick={() => xlsxRef.current?.click()}
+              disabled={!ready}
+              color={xlsxRows ? "green" : "default"}
+              title={xlsxRows ? `${xlsxRows.length} rows loaded — click to replace` : "Upload Excel data for preview"}
+            />
+            {xlsxRows && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 bg-green-500 text-white rounded-full text-[8px] flex items-center justify-center font-bold px-0.5 pointer-events-none">
+                {xlsxRows.length > 99 ? "99+" : xlsxRows.length}
+              </span>
+            )}
+          </div>
         </RibbonGroup>
 
         {/* ── Page ── */}
@@ -493,6 +535,7 @@ export default function Toolbar({
       <input ref={frameRef}    type="file" accept="image/*"                      onChange={handleFrame}       className="hidden" />
       <input ref={watermarkRef} type="file" accept="image/*"                     onChange={handleWatermark}   className="hidden" />
       <input ref={templateRef} type="file" accept=".json,application/json"       onChange={handleLoadTemplate} className="hidden" />
+      <input ref={xlsxRef}    type="file" accept=".xlsx,.xls"                   onChange={handleXlsxUpload} className="hidden" />
 
       {/* ── Popovers ── */}
 
