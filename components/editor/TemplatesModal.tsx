@@ -6,6 +6,7 @@ import type { CanvasSize } from "./Editor";
 import {
   listTemplates,
   saveTemplate,
+  updateTemplate,
   deleteTemplate,
   type SavedTemplate,
 } from "@/lib/templates";
@@ -29,11 +30,14 @@ function formatDate(ts: number) {
 
 export default function TemplatesModal({ fabricRef, canvasSize, onLoad, onClose }: Props) {
   const [templates, setTemplates] = useState<SavedTemplate[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [name, setName] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [search, setSearch] = useState("");
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [loading, setLoading]     = useState(true);
+  const [name, setName]           = useState("");
+  const [saving, setSaving]       = useState(false);
+  const [search, setSearch]       = useState("");
+  const [deleteId, setDeleteId]   = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [renameId, setRenameId]   = useState<string | null>(null);
+  const [renameVal, setRenameVal] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
 
   const refresh = async () => {
@@ -80,6 +84,41 @@ export default function TemplatesModal({ fabricRef, canvasSize, onLoad, onClose 
     await deleteTemplate(id);
     setDeleteId(null);
     await refresh();
+  };
+
+  const handleUpdate = async (t: SavedTemplate) => {
+    const c = fabricRef.current;
+    if (!c) return;
+    setUpdatingId(t.id);
+    try {
+      const thumbnail = c.toDataURL({ multiplier: 0.18, format: "jpeg", quality: 0.7 });
+      const canvasJSON = JSON.stringify({
+        ...c.toObject(["data"]),
+        _certgen: { canvasSize, bgColor: (c.backgroundColor as string) || "#ffffff" },
+      });
+      await updateTemplate(t.id, { canvasJSON, thumbnail, savedAt: Date.now() });
+      await refresh();
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleRenameStart = (t: SavedTemplate) => {
+    setRenameId(t.id);
+    setRenameVal(t.name);
+  };
+
+  const handleRenameCommit = async (id: string) => {
+    const trimmed = renameVal.trim();
+    if (trimmed) await updateTemplate(id, { name: trimmed });
+    setRenameId(null);
+    setRenameVal("");
+    await refresh();
+  };
+
+  const handleRenameCancel = () => {
+    setRenameId(null);
+    setRenameVal("");
   };
 
   const query = search.toLowerCase().trim();
@@ -222,9 +261,24 @@ export default function TemplatesModal({ fabricRef, canvasSize, onLoad, onClose 
 
                   {/* Info */}
                   <div className="p-3.5 flex flex-col flex-1">
-                    <p className="text-sm font-medium text-gray-800 truncate" title={t.name}>{t.name}</p>
+                    {renameId === t.id ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        value={renameVal}
+                        onChange={(e) => setRenameVal(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter")  { e.preventDefault(); handleRenameCommit(t.id); }
+                          if (e.key === "Escape") { e.preventDefault(); handleRenameCancel(); }
+                        }}
+                        onBlur={() => handleRenameCommit(t.id)}
+                        className="text-sm font-medium text-gray-800 w-full border border-blue-400 rounded-md px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      />
+                    ) : (
+                      <p className="text-sm font-medium text-gray-800 truncate" title={t.name}>{t.name}</p>
+                    )}
                     <p className="text-xs text-gray-400 mt-0.5 mb-3">{formatDate(t.savedAt)}</p>
-                    <div className="flex gap-2 mt-auto">
+                    <div className="flex gap-1.5 mt-auto">
                       <button
                         onClick={() => handleLoad(t)}
                         className="flex-1 text-xs py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
@@ -232,9 +286,36 @@ export default function TemplatesModal({ fabricRef, canvasSize, onLoad, onClose 
                         Load
                       </button>
                       <button
+                        onClick={() => handleUpdate(t)}
+                        disabled={!!updatingId}
+                        title="Overwrite with current canvas"
+                        className="px-2.5 text-xs py-1.5 border border-gray-200 text-gray-500 rounded-lg hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors disabled:opacity-40"
+                      >
+                        {updatingId === t.id ? (
+                          <svg className="animate-spin w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 12 12">
+                            <circle cx="6" cy="6" r="4" strokeOpacity="0.2"/>
+                            <path d="M6 2a4 4 0 0 1 4 4" strokeLinecap="round"/>
+                          </svg>
+                        ) : (
+                          <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 5A4 4 0 0 1 9.3 3.5M9.5 1.5v2.5H7"/>
+                            <path d="M10 6A4 4 0 0 1 1.7 7.5M1.5 9.5V7H4"/>
+                          </svg>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleRenameStart(t)}
+                        title="Rename"
+                        className="px-2.5 text-xs py-1.5 border border-gray-200 text-gray-500 rounded-lg hover:bg-amber-50 hover:text-amber-600 hover:border-amber-200 transition-colors"
+                      >
+                        <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M7.5 1.5l2 2-6 6H1.5v-2l6-6z"/>
+                        </svg>
+                      </button>
+                      <button
                         onClick={() => setDeleteId(t.id)}
-                        className="px-3 text-xs py-1.5 border border-gray-200 text-gray-500 rounded-lg hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
                         title="Delete"
+                        className="px-2.5 text-xs py-1.5 border border-gray-200 text-gray-500 rounded-lg hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
                       >
                         <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
                           <path d="M1.5 2.5h8M4 2.5V1.5h3V2.5M2.5 2.5l.5 7h5.5l.5-7" />

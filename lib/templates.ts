@@ -52,6 +52,26 @@ export async function saveTemplate(
   });
 }
 
+export async function updateTemplate(
+  id: string,
+  data: Partial<Omit<SavedTemplate, "id">>
+): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const existing = getReq.result as SavedTemplate | undefined;
+      if (!existing) { reject(new Error("Template not found")); return; }
+      const putReq = store.put({ ...existing, ...data });
+      putReq.onsuccess = () => resolve();
+      putReq.onerror  = () => reject(putReq.error);
+    };
+    getReq.onerror = () => reject(getReq.error);
+  });
+}
+
 export async function deleteTemplate(id: string): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
