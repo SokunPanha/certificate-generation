@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { bulkExport, renderRow, type BulkProgress, type ExportMode } from "@/lib/bulkExport";
 import type { CanvasSize } from "./Editor";
 
@@ -25,28 +25,21 @@ const SAMPLE_DATA: Record<string, string[]> = {
   gender:   ["ប្រុស", "ស្រី"],
 };
 
-function getSample(varName: string, rowIdx: number): string {
-  const values = SAMPLE_DATA[varName];
-  return values ? values[rowIdx % values.length] : `${varName}_${rowIdx + 1}`;
+function getSample(v: string, i: number) {
+  const arr = SAMPLE_DATA[v];
+  return arr ? arr[i % arr.length] : `${v}_${i + 1}`;
 }
 
-function extractVarsFromJSON(templateJSON: object): string[] {
+function extractVarsFromJSON(json: object): string[] {
   const found = new Set<string>();
-  const RE = /\{\{(\w+)\}\}/g;
-  const str = JSON.stringify(templateJSON);
-  for (const m of str.matchAll(RE)) found.add(m[1]);
+  for (const m of JSON.stringify(json).matchAll(/\{\{(\w+)\}\}/g)) found.add(m[1]);
   return [...found];
 }
 
 async function downloadSampleXLSX(vars: string[]) {
   const XLSX = await import("xlsx");
-  const header = vars;
-  const rows = [0, 1].map((i) => vars.map((v) => getSample(v, i)));
-  const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
-
-  // Style header row bold (column widths for readability)
+  const ws = XLSX.utils.aoa_to_sheet([vars, ...[0, 1].map((i) => vars.map((v) => getSample(v, i)))]);
   ws["!cols"] = vars.map(() => ({ wch: 20 }));
-
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Certificates");
   XLSX.writeFile(wb, "certificate-sample.xlsx");
@@ -54,332 +47,410 @@ async function downloadSampleXLSX(vars: string[]) {
 
 async function parseXLSX(file: File): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
   const XLSX = await import("xlsx");
-  const buffer = await file.arrayBuffer();
-  const wb = XLSX.read(buffer, { type: "array" });
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { raw: false, defval: "" });
   if (!raw.length) return { headers: [], rows: [] };
   const headers = Object.keys(raw[0]);
-  const rows = raw.map((r) =>
-    Object.fromEntries(headers.map((h) => [h, String(r[h] ?? "")])) as Record<string, string>
-  );
-  return { headers, rows };
+  return {
+    headers,
+    rows: raw.map((r) =>
+      Object.fromEntries(headers.map((h) => [h, String(r[h] ?? "")])) as Record<string, string>
+    ),
+  };
 }
 
 export default function BulkExportModal({ templateJSON, canvasSize, onClose }: Props) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [headers, setHeaders] = useState<string[]>([]);
-  const [rows, setRows] = useState<Record<string, string>[]>([]);
-  const [progress, setProgress] = useState<BulkProgress | null>(null);
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState("");
-  const [mode, setMode] = useState<ExportMode>("combined");
-  const [previewDataURL, setPreviewDataURL] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
+  const fileRef      = useRef<HTMLInputElement>(null);
+  const rowListRef   = useRef<HTMLDivElement>(null);
+  const renderIdRef  = useRef(0);
+  const pageInputRef = useRef<HTMLInputElement>(null);
+
+  const [headers, setHeaders]       = useState<string[]>([]);
+  const [rows, setRows]             = useState<Record<string, string>[]>([]);
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [pageInput, setPageInput]   = useState("1");
+  const [previewURL, setPreviewURL] = useState<string | null>(null);
+  const [rendering, setRendering] = useState(false);
+  const [progress, setProgress]   = useState<BulkProgress | null>(null);
+  const [done, setDone]           = useState(false);
+  const [error, setError]         = useState("");
+  const [mode, setMode]           = useState<ExportMode>("combined");
 
   const canvasVars = extractVarsFromJSON(templateJSON);
-  const hasVars = canvasVars.length > 0;
+  const hasVars    = canvasVars.length > 0;
+  const running    = !!progress && !done;
+  const templateStr = JSON.stringify(templateJSON);
 
-  const handleDownloadSample = async () => {
-    const vars = hasVars ? canvasVars : DEFAULT_VARS;
-    await downloadSampleXLSX(vars);
-  };
+  // ── Render current row ────────────────────────────────────────────────────
+
+  const doRender = useCallback(async (row: Record<string, string>, id: number) => {
+    setRendering(true);
+    setPreviewURL(null);
+    try {
+      const fabric = await import("fabric");
+      const url = await renderRow(fabric, templateStr, row, canvasSize.width, canvasSize.height);
+      if (renderIdRef.current === id) setPreviewURL(url);
+    } catch (e) {
+      if (renderIdRef.current === id) setError(String(e));
+    } finally {
+      if (renderIdRef.current === id) setRendering(false);
+    }
+  }, [templateStr, canvasSize]);
+
+  useEffect(() => {
+    if (!rows.length) return;
+    const id = ++renderIdRef.current;
+    doRender(rows[currentIdx], id);
+  }, [rows, currentIdx, doRender]);
+
+  // Scroll the active row into view in the sidebar list
+  useEffect(() => {
+    const el = rowListRef.current?.querySelector(`[data-idx="${currentIdx}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [currentIdx]);
+
+  // Sync page input with currentIdx, but don't overwrite while the user is typing
+  useEffect(() => {
+    if (document.activeElement !== pageInputRef.current) {
+      setPageInput(String(currentIdx + 1));
+    }
+  }, [currentIdx]);
+
+  const commitPageInput = useCallback(() => {
+    const n = parseInt(pageInput, 10);
+    if (!isNaN(n) && n >= 1 && n <= rows.length) {
+      setCurrentIdx(n - 1);
+    } else {
+      setPageInput(String(currentIdx + 1));
+    }
+    pageInputRef.current?.blur();
+  }, [pageInput, rows.length, currentIdx]);
+
+  // ── Keyboard navigation ───────────────────────────────────────────────────
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { onClose(); return; }
+      if (!rows.length || running) return;
+      // Don't intercept arrow keys while the page-number input has focus
+      if ((e.target as HTMLElement).tagName === "INPUT") return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setCurrentIdx((i) => Math.max(0, i - 1));
+      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        setCurrentIdx((i) => Math.min(rows.length - 1, i + 1));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rows.length, running, onClose]);
+
+  // ── File handlers ─────────────────────────────────────────────────────────
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setError("");
-    setDone(false);
-    setProgress(null);
-    setPreviewDataURL(null);
+    const file = e.target.files?.[0]; if (!file) return;
+    setError(""); setDone(false); setProgress(null); setPreviewURL(null);
     try {
       const { headers: h, rows: r } = await parseXLSX(file);
       if (!r.length) { setError("File is empty or could not be read."); return; }
-      setHeaders(h);
-      setRows(r);
-    } catch (err) {
-      setError(String(err));
-    }
+      setHeaders(h); setRows(r); setCurrentIdx(0);
+    } catch (e) { setError(String(e)); }
     e.target.value = "";
-  };
-
-  const handlePreviewRow = async () => {
-    if (!rows.length) return;
-    setPreviewLoading(true);
-    setPreviewDataURL(null);
-    try {
-      const fabric = await import("fabric");
-      const dataURL = await renderRow(fabric, JSON.stringify(templateJSON), rows[0], canvasSize.width, canvasSize.height);
-      setPreviewDataURL(dataURL);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setPreviewLoading(false);
-    }
   };
 
   const handleGenerate = async () => {
     if (!rows.length) return;
-    setError("");
-    setDone(false);
+    setError(""); setDone(false);
     setProgress({ current: 0, total: rows.length, label: "Starting…" });
     try {
       await bulkExport(mode, templateJSON, rows, canvasSize.width, canvasSize.height, setProgress);
       setDone(true);
-    } catch (err) {
-      setError(String(err));
-      setProgress(null);
-    }
+    } catch (e) { setError(String(e)); setProgress(null); }
   };
 
-  const running = !!progress && !done;
   const pct = progress ? Math.round((progress.current / progress.total) * 100) : 0;
 
+  // ── Layout ────────────────────────────────────────────────────────────────
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
-          <h2 className="font-semibold text-gray-800">Bulk Certificate Generation</h2>
-          <button
-            onClick={onClose}
-            disabled={running}
-            className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100 transition-colors disabled:opacity-30"
-          >
-            ✕
-          </button>
-        </div>
+    <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "#e5e7eb" }}>
 
-        <div className="overflow-y-auto flex-1 p-6 space-y-6">
+      {/* ── Top bar ── */}
+      <div className="flex items-center gap-3 px-4 h-12 bg-white border-b border-gray-200 shadow-sm shrink-0">
+        <button
+          onClick={onClose}
+          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+            <path d="M9 2L4 7l5 5"/>
+          </svg>
+          Editor
+        </button>
 
-          {/* Step 1 */}
-          <section>
-            <div className="flex items-center gap-2 mb-2">
-              <StepBadge n={1} />
-              <h3 className="text-sm font-medium text-gray-700">Variables detected in your design</h3>
+        <div className="h-4 w-px bg-gray-200" />
+        <span className="font-semibold text-sm text-gray-800">Bulk Export</span>
+        {rows.length > 0 && (
+          <span className="text-xs bg-gray-100 text-gray-500 rounded-full px-2 py-0.5">{rows.length} records</span>
+        )}
+
+        <div className="flex-1" />
+
+        {running ? (
+          <div className="flex items-center gap-2 text-xs text-gray-600">
+            <svg className="animate-spin w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 16 16">
+              <circle cx="8" cy="8" r="6" strokeOpacity="0.2"/>
+              <path d="M8 2a6 6 0 0 1 6 6" strokeLinecap="round"/>
+            </svg>
+            {progress!.label} &nbsp;{pct}%
+          </div>
+        ) : rows.length > 0 ? (
+          <div className="flex items-center gap-2">
+            <div className="flex bg-gray-100 rounded-lg p-0.5 gap-0.5">
+              {(["combined", "zip"] as ExportMode[]).map((m) => (
+                <button key={m} onClick={() => setMode(m)}
+                  className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                    mode === m ? "bg-white shadow-sm font-medium text-gray-800" : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  {m === "combined" ? "Combined PDF" : "ZIP"}
+                </button>
+              ))}
             </div>
-            {hasVars ? (
-              <div className="ml-7">
-                <div className="flex flex-wrap gap-1.5 mb-2">
+            <button
+              onClick={handleGenerate}
+              className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 13 13">
+                <path d="M6.5 1v8M4 6.5l2.5 2.5L9 6.5M1 11h11"/>
+              </svg>
+              Export {rows.length} certificates
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      {/* ── Body ── */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* ── Left sidebar ── */}
+        <div className="w-64 shrink-0 bg-white border-r border-gray-200 flex flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto p-4 space-y-5">
+
+            {/* Data source */}
+            <section>
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Data Source</p>
+
+              <button onClick={() => fileRef.current?.click()}
+                className="w-full text-left flex items-center gap-2 px-3 py-2.5 border-2 border-dashed border-gray-300 hover:border-blue-400 hover:text-blue-600 text-gray-600 text-sm rounded-xl transition-colors"
+              >
+                <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 14 14">
+                  <path d="M7 9.5V2M4.5 5l2.5-3 2.5 3M1.5 11.5h11"/>
+                </svg>
+                {rows.length > 0 ? `${rows.length} rows — replace` : "Upload Excel (.xlsx)"}
+              </button>
+              <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" />
+
+              <button
+                onClick={() => downloadSampleXLSX(hasVars ? canvasVars : DEFAULT_VARS)}
+                className="mt-1.5 w-full text-left flex items-center gap-2 px-3 py-2 text-xs text-green-700 bg-green-50 hover:bg-green-100 rounded-lg transition-colors"
+              >
+                <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 12 12">
+                  <path d="M6 1v6.5M3.5 5L6 7.5 8.5 5M1 10h10"/>
+                </svg>
+                Download sample Excel
+              </button>
+            </section>
+
+            {/* Variables */}
+            <section>
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Variables in template</p>
+              {hasVars ? (
+                <div className="flex flex-wrap gap-1">
                   {canvasVars.map((v) => (
-                    <code key={v} className="text-xs bg-amber-50 text-amber-700 px-2 py-1 rounded border border-amber-200 font-mono">
+                    <code key={v} className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200 font-mono">
                       {`{{${v}}}`}
                     </code>
                   ))}
                 </div>
-                <p className="text-xs text-gray-400">These will become the Excel column headers.</p>
-              </div>
-            ) : (
-              <p className="ml-7 text-xs text-orange-600 bg-orange-50 rounded-lg px-3 py-2 leading-5">
-                No <span className="font-mono">{"{{variables}}"}</span> found in your design yet.
-                The sample will use default columns instead.
-              </p>
-            )}
-          </section>
-
-          {/* Step 2 */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <StepBadge n={2} />
-              <h3 className="text-sm font-medium text-gray-700">Download sample Excel, fill it in, upload</h3>
-            </div>
-
-            {/* Download */}
-            <button
-              onClick={handleDownloadSample}
-              className="ml-7 flex items-center gap-2 px-4 py-2.5 bg-green-50 hover:bg-green-100 text-green-700 text-sm rounded-xl transition-colors"
-            >
-              <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 15 15">
-                <path d="M7.5 2v7M4.5 6l3 3 3-3M2.5 12h10" />
-              </svg>
-              Download Sample Excel (.xlsx)
-            </button>
-            <p className="ml-7 mt-1.5 text-xs text-gray-400">
-              {hasVars
-                ? <>Columns: <span className="font-mono">{canvasVars.join(", ")}</span></>
-                : <>Default columns: <span className="font-mono">name, grade, class, rank…</span></>}
-            </p>
-
-            <div className="ml-7 my-4 flex items-center gap-3">
-              <div className="flex-1 h-px bg-gray-100" />
-              <span className="text-xs text-gray-400">fill in your data, then upload</span>
-              <div className="flex-1 h-px bg-gray-100" />
-            </div>
-
-            {/* Upload */}
-            <button
-              onClick={() => fileRef.current?.click()}
-              className="ml-7 flex items-center gap-2 px-4 py-2.5 border-2 border-dashed border-gray-300 hover:border-blue-400 hover:text-blue-600 text-gray-600 text-sm rounded-xl transition-colors"
-            >
-              <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 15 15">
-                <path d="M7.5 10V3M4.5 6l3-3 3 3M2.5 12h10" />
-              </svg>
-              {rows.length > 0
-                ? `${rows.length} rows loaded — choose a different file`
-                : "Upload Excel (.xlsx)"}
-            </button>
-            <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" />
-
-            {/* Preview table */}
-            {rows.length > 0 && (
-              <div className="ml-7 mt-3 rounded-xl border border-gray-200 overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="text-xs w-full">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200">
-                        {headers.map((h) => (
-                          <th key={h} className="px-3 py-2 text-left text-gray-600 font-semibold whitespace-nowrap">
-                            {h}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.slice(0, 3).map((row, i) => (
-                        <tr key={i} className="border-b border-gray-100 last:border-0">
-                          {headers.map((h) => (
-                            <td key={h} className="px-3 py-2 text-gray-700 whitespace-nowrap">{row[h]}</td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {rows.length > 3 && (
-                  <div className="px-3 py-1.5 text-xs text-gray-400 bg-gray-50 border-t border-gray-100 text-center">
-                    + {rows.length - 3} more rows
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* Row 1 Preview */}
-          {rows.length > 0 && (
-            <section>
-              <div className="flex items-center gap-2 mb-3">
-                <StepBadge n={3} />
-                <h3 className="text-sm font-medium text-gray-700">Preview first row before generating</h3>
-              </div>
-              <div className="ml-7">
-                <button
-                  onClick={handlePreviewRow}
-                  disabled={previewLoading}
-                  className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-sm rounded-xl transition-colors disabled:opacity-50"
-                >
-                  <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 15 15">
-                    <ellipse cx="7.5" cy="7.5" rx="7" ry="4.5" />
-                    <circle cx="7.5" cy="7.5" r="2" fill="currentColor" stroke="none" />
-                  </svg>
-                  {previewLoading ? "Rendering…" : "Preview Row 1"}
-                </button>
-                {previewDataURL && (
-                  <div className="mt-3 rounded-xl overflow-hidden border border-gray-200 shadow-sm">
-                    <img src={previewDataURL} alt="Row 1 preview" className="w-full" />
-                    <p className="text-xs text-gray-400 text-center py-1.5 bg-gray-50 border-t border-gray-100">
-                      Row 1 preview — {rows[0][Object.keys(rows[0])[0]] ?? ""}
-                    </p>
-                  </div>
-                )}
-              </div>
+              ) : (
+                <p className="text-xs text-orange-600 bg-orange-50 px-2.5 py-2 rounded-lg leading-snug">
+                  No <span className="font-mono">{"{{variables}}"}</span> found — all certificates will look the same.
+                </p>
+              )}
             </section>
+
+            {/* Row list */}
+            {rows.length > 0 && (
+              <section>
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Records</p>
+                <div ref={rowListRef} className="rounded-xl border border-gray-200 overflow-hidden max-h-64 overflow-y-auto">
+                  {rows.map((row, i) => (
+                    <button
+                      key={i}
+                      data-idx={i}
+                      onClick={() => setCurrentIdx(i)}
+                      className={`w-full text-left flex items-center gap-2 px-3 py-2 text-xs border-b border-gray-100 last:border-0 transition-colors ${
+                        i === currentIdx
+                          ? "bg-blue-50 text-blue-700 font-medium"
+                          : "text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      <span className="text-gray-400 w-5 text-right shrink-0 tabular-nums">{i + 1}</span>
+                      <span className="truncate">{row[headers[0]] ?? `Row ${i + 1}`}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+
+          {/* Progress / done / error pinned to bottom of sidebar */}
+          {(progress || done || error) && (
+            <div className="p-4 border-t border-gray-100 space-y-2 shrink-0">
+              {progress && !done && (
+                <>
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span className="truncate">{progress.label}</span>
+                    <span className="ml-2 shrink-0 tabular-nums">{pct}%</span>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-1.5">
+                    <div
+                      className="bg-blue-500 h-1.5 rounded-full transition-all duration-200"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </>
+              )}
+              {done && (
+                <div className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2 flex items-center gap-2">
+                  <span>✓</span>
+                  <span>{rows.length} certificates exported.</span>
+                </div>
+              )}
+              {error && (
+                <div className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Preview area ── */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+
+          {/* Row nav bar */}
+          {rows.length > 0 && (
+            <div className="flex items-center justify-center gap-3 h-10 bg-white/80 backdrop-blur-sm border-b border-gray-200 shrink-0">
+              <button
+                onClick={() => setCurrentIdx((i) => Math.max(0, i - 1))}
+                disabled={currentIdx === 0 || running}
+                className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 disabled:opacity-30 transition-colors"
+                title="Previous (← arrow)"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M8 2L3 6l5 4"/>
+                </svg>
+              </button>
+
+              <span className="flex items-center gap-1 text-sm text-gray-600 select-none">
+                <input
+                  ref={pageInputRef}
+                  type="text"
+                  inputMode="numeric"
+                  value={pageInput}
+                  onChange={(e) => setPageInput(e.target.value)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onBlur={commitPageInput}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") { e.preventDefault(); commitPageInput(); }
+                    if (e.key === "Escape") { setPageInput(String(currentIdx + 1)); pageInputRef.current?.blur(); }
+                  }}
+                  disabled={running || !rows.length}
+                  className="w-10 text-center font-semibold text-gray-900 tabular-nums bg-transparent border-b border-gray-300 focus:border-blue-500 focus:outline-none disabled:opacity-50 pb-px"
+                  title="Type a row number and press Enter"
+                />
+                <span className="text-gray-400">/ {rows.length}</span>
+                {rows[currentIdx] && headers[0] && (
+                  <span className="ml-1 text-xs text-gray-400">— {rows[currentIdx][headers[0]]}</span>
+                )}
+              </span>
+
+              <button
+                onClick={() => setCurrentIdx((i) => Math.min(rows.length - 1, i + 1))}
+                disabled={currentIdx >= rows.length - 1 || running}
+                className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 disabled:opacity-30 transition-colors"
+                title="Next (→ arrow)"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M4 2l5 4-5 4"/>
+                </svg>
+              </button>
+            </div>
           )}
 
-          {/* Step 4 */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <StepBadge n={4} />
-              <h3 className="text-sm font-medium text-gray-700">Choose output format &amp; generate</h3>
-            </div>
+          {/* Certificate canvas — Word-style */}
+          <div className="flex-1 overflow-auto flex items-center justify-center p-10">
+            {rows.length === 0 ? (
 
-            {/* Mode toggle */}
-            <div className="ml-7 mb-4 grid grid-cols-2 gap-2">
-              <button
-                onClick={() => setMode("combined")}
-                className={`flex flex-col items-start gap-1 px-4 py-3 rounded-xl border-2 text-left transition-colors ${
-                  mode === "combined"
-                    ? "border-blue-500 bg-blue-50 text-blue-700"
-                    : "border-gray-200 text-gray-600 hover:border-gray-300"
-                }`}
-              >
-                <span className="flex items-center gap-1.5 text-sm font-medium">
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                    <rect x="1" y="1" width="12" height="12" rx="1.5" />
-                    <path d="M1 4.5h12M1 8h12" />
+              /* Empty state */
+              <div className="text-center space-y-4 select-none">
+                <div className="w-20 h-20 mx-auto bg-gray-300 rounded-3xl flex items-center justify-center text-gray-400">
+                  <svg width="34" height="34" fill="none" stroke="currentColor" strokeWidth="1.3" viewBox="0 0 34 34">
+                    <rect x="4" y="5" width="26" height="24" rx="2.5"/>
+                    <path d="M4 12h26M11 5v7M23 5v7M10 20h14M10 25h8"/>
                   </svg>
-                  Combined PDF
-                </span>
-                <span className="text-xs opacity-70 leading-tight">One file, all pages — open &amp; print at once</span>
-              </button>
-
-              <button
-                onClick={() => setMode("zip")}
-                className={`flex flex-col items-start gap-1 px-4 py-3 rounded-xl border-2 text-left transition-colors ${
-                  mode === "zip"
-                    ? "border-blue-500 bg-blue-50 text-blue-700"
-                    : "border-gray-200 text-gray-600 hover:border-gray-300"
-                }`}
-              >
-                <span className="flex items-center gap-1.5 text-sm font-medium">
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                    <path d="M2 12V4l3-3h5.5a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1z" />
-                    <path d="M5 1v3H2" />
-                    <path d="M6 6h2M6 8.5h2M6 11h2" strokeDasharray="2 1" />
-                  </svg>
-                  Individual ZIP
-                </span>
-                <span className="text-xs opacity-70 leading-tight">Separate PDF per student in a ZIP</span>
-              </button>
-            </div>
-
-            {error && (
-              <div className="ml-7 mb-3 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>
-            )}
-
-            {progress && (
-              <div className="ml-7 mb-3">
-                <div className="flex justify-between text-xs text-gray-500 mb-1">
-                  <span className="truncate">{progress.label}</span>
-                  <span className="ml-2 flex-shrink-0">{pct}%</span>
                 </div>
-                <div className="w-full bg-gray-100 rounded-full h-2">
-                  <div className="bg-blue-500 h-2 rounded-full transition-all duration-200" style={{ width: `${pct}%` }} />
+                <div>
+                  <p className="text-gray-600 font-medium">No data loaded</p>
+                  <p className="text-gray-400 text-sm mt-1">Upload an Excel file from the sidebar to preview certificates</p>
                 </div>
               </div>
-            )}
 
-            {done && (
-              <div className="ml-7 mb-3 text-sm text-green-700 bg-green-50 rounded-xl px-4 py-3 flex items-center gap-2">
-                <span>✓</span>
-                <span>
-                  {rows.length} certificates exported as{" "}
-                  {mode === "combined" ? "a combined PDF" : "a ZIP"} — check your Downloads folder.
-                </span>
-              </div>
-            )}
+            ) : rendering ? (
 
-            <div className="ml-7">
-              <button
-                onClick={handleGenerate}
-                disabled={!rows.length || running}
-                className="w-full py-2.5 bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition-colors"
+              /* Loading — sized to the canvas aspect ratio */
+              <div
+                className="bg-white shadow-2xl rounded flex items-center justify-center"
+                style={{
+                  width: "100%",
+                  maxWidth: Math.min(canvasSize.width, 780),
+                  aspectRatio: `${canvasSize.width} / ${canvasSize.height}`,
+                }}
               >
-                {running
-                  ? `Generating ${progress!.current} / ${progress!.total}…`
-                  : `Generate ${rows.length > 0 ? `${rows.length} ` : ""}Certificates`}
-              </button>
-            </div>
-          </section>
+                <div className="flex flex-col items-center gap-3 text-gray-400">
+                  <svg className="animate-spin w-7 h-7" fill="none" stroke="currentColor" strokeWidth="1.6" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" strokeOpacity="0.2"/>
+                    <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round"/>
+                  </svg>
+                  <span className="text-sm">Rendering row {currentIdx + 1}…</span>
+                </div>
+              </div>
+
+            ) : previewURL ? (
+
+              /* Certificate page — drop-shadow like a real printed page */
+              <div
+                className="bg-white rounded overflow-hidden"
+                style={{
+                  width: "100%",
+                  maxWidth: Math.min(canvasSize.width, 780),
+                  boxShadow: "0 4px 6px -1px rgb(0 0 0/.15), 0 20px 60px -10px rgb(0 0 0/.25)",
+                }}
+              >
+                <img
+                  src={previewURL}
+                  alt={`Certificate ${currentIdx + 1}`}
+                  className="w-full block"
+                  draggable={false}
+                />
+              </div>
+
+            ) : null}
+          </div>
         </div>
+
       </div>
     </div>
-  );
-}
-
-function StepBadge({ n }: { n: number }) {
-  return (
-    <span className="w-5 h-5 bg-blue-100 text-blue-700 rounded-full text-xs flex items-center justify-center font-bold flex-shrink-0">
-      {n}
-    </span>
   );
 }

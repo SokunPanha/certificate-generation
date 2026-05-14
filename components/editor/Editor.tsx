@@ -3,7 +3,7 @@
 // Static import is safe — this module only loads in the browser via EditorWrapper (ssr: false)
 import * as fabric from "fabric";
 import { useRef, useState, useEffect, useCallback } from "react";
-import type { Canvas, Object as FabricObject, Textbox } from "fabric";
+import type { Canvas, FabricObject, Textbox } from "fabric";
 import Toolbar from "./Toolbar";
 import LayersPanel from "./LayersPanel";
 import PropertiesPanel from "./PropertiesPanel";
