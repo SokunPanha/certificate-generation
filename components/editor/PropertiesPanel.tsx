@@ -53,70 +53,69 @@ export default function PropertiesPanel({ activeObject, fabricRef, bgColor, onBg
     }
   }, [activeObject]);
 
-  const handleFont = async (family: string) => {
+  const handleFont = useCallback(async (family: string) => {
     setFontFamily(family);
     await loadFont(family);
     if (!activeObject) return;
     activeObject.set({ fontFamily: family });
-    // Force Fabric.js to re-measure glyph widths after the new font loads
     const maybeText = activeObject as unknown as { initDimensions?: () => void };
     if (typeof maybeText.initDimensions === "function") {
       maybeText.initDimensions();
     }
     fabricRef.current?.renderAll();
-  };
+  }, [activeObject, fabricRef]);
 
-  const handleSize = (size: number) => {
+  const handleSize = useCallback((size: number) => {
     setFontSize(size);
     if (!activeObject) return;
     activeObject.set({ fontSize: size });
     fabricRef.current?.renderAll();
-  };
+  }, [activeObject, fabricRef]);
 
-  const handleBold = () => {
+  const handleBold = useCallback(() => {
     const next = !bold;
     setBold(next);
     if (!activeObject) return;
     activeObject.set({ fontWeight: next ? "bold" : "normal" });
     fabricRef.current?.renderAll();
-  };
+  }, [bold, activeObject, fabricRef]);
 
-  const handleItalic = () => {
+  const handleItalic = useCallback(() => {
     const next = !italic;
     setItalic(next);
     if (!activeObject) return;
     activeObject.set({ fontStyle: next ? "italic" : "normal" });
     fabricRef.current?.renderAll();
-  };
+  }, [italic, activeObject, fabricRef]);
 
-  const handleUnderline = () => {
+  const handleUnderline = useCallback(() => {
     const next = !underline;
     setUnderline(next);
     if (!activeObject) return;
     activeObject.set({ underline: next });
     fabricRef.current?.renderAll();
-  };
+  }, [underline, activeObject, fabricRef]);
 
-  const handleColor = (c: string) => {
+  const handleColor = useCallback((c: string) => {
     setColor(c);
     if (!activeObject) return;
     activeObject.set({ fill: c });
     fabricRef.current?.renderAll();
-  };
+  }, [activeObject, fabricRef]);
 
-  const handleAlign = (align: "left" | "center" | "right") => {
+  const handleAlign = useCallback((align: "left" | "center" | "right") => {
     setTextAlign(align);
     if (!activeObject) return;
     activeObject.set({ textAlign: align });
     fabricRef.current?.renderAll();
-  };
+  }, [activeObject, fabricRef]);
 
-  const handleOpacity = (val: number) => {
+  const handleOpacity = useCallback((val: number) => {
     setOpacity(val);
     if (!activeObject) return;
     activeObject.set({ opacity: val / 100 });
     fabricRef.current?.renderAll();
-  };
+  }, [activeObject, fabricRef]);
 
   const isWatermark =
     (activeObject as unknown as { data?: { role?: string } })?.data?.role ===

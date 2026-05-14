@@ -82,14 +82,12 @@ export async function loadFont(family: string): Promise<void> {
     const ext = (font.file.split(".").pop() ?? "ttf").toLowerCase();
     const isOtf = ext === "otf";
     const format = isOtf ? "opentype" : "truetype";
-    // Encode each path segment individually so spaces and special chars in
-    // both the folder name and the file name are handled correctly.
-    const encodedPath =
-      "/khmer%20font/" + font.file.split("").map((ch) => {
-        // Characters safe in a CSS url() without extra encoding
-        if (/[A-Za-z0-9\-_.~]/.test(ch)) return ch;
-        return encodeURIComponent(ch);
-      }).join("");
+    const baseUrl = (process.env.NEXT_PUBLIC_FONTS_BASE_URL ?? "").replace(/\/$/, "") || "/khmer%20font";
+    const encodedFile = font.file.split("").map((ch) => {
+      if (/[A-Za-z0-9\-_.~]/.test(ch)) return ch;
+      return encodeURIComponent(ch);
+    }).join("");
+    const encodedPath = `${baseUrl}/${encodedFile}`;
 
     const escaped = family.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
