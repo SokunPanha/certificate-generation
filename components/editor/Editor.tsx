@@ -540,6 +540,16 @@ export default function Editor() {
     setShowExport(true);
   }, [captureCurrentPage]);
 
+  const handlePrint = useCallback(() => {
+    const c = fabricRef.current;
+    if (!c) return;
+    if (previewModeRef.current) exitPreview();
+    const dataURL = c.toDataURL({ format: "png", multiplier: 2 });
+    import("@/lib/print").then(({ openPrintWindow }) =>
+      openPrintWindow([dataURL], canvasSize)
+    );
+  }, [canvasSize, exitPreview]);
+
   // ── Auto-save restore ─────────────────────────────────────────────────────────
 
   const restoreAutoSave = useCallback(async (record: AutoSaveRecord) => {
@@ -712,6 +722,7 @@ export default function Editor() {
 
       if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) { e.preventDefault(); undo(); return; }
       if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); redo(); return; }
+      if ((e.metaKey || e.ctrlKey) && e.key === "p") { e.preventDefault(); handlePrint(); return; }
 
       // Group: Ctrl+G
       if ((e.metaKey || e.ctrlKey) && e.key === "g" && !e.shiftKey && !isEditing) {
@@ -795,7 +806,7 @@ export default function Editor() {
       fabricRef.current = null;
       setReady(false);
     };
-  }, [syncLayers, saveSnapshot, undo, redo]);
+  }, [syncLayers, saveSnapshot, undo, redo, handlePrint]);
 
   // ── Ctrl+scroll zoom ──────────────────────────────────────────────────────────
 
@@ -832,6 +843,7 @@ export default function Editor() {
         onGroupSelected={groupSelected}
         onUngroupSelected={ungroupSelected}
         onOpenExport={openExportModal}
+        onPrint={handlePrint}
         onSaveTemplate={saveTemplate}
         onLoadTemplate={loadTemplate}
         onOpenBulk={() => {

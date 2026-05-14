@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { bulkExport, renderRow, type BulkProgress, type ExportMode } from "@/lib/bulkExport";
+import { openPrintWindow } from "@/lib/print";
 import type { CanvasSize } from "./Editor";
 
 interface Props {
@@ -72,10 +73,12 @@ export default function BulkExportModal({ templateJSON, canvasSize, onClose }: P
   const [pageInput, setPageInput]   = useState("1");
   const [previewURL, setPreviewURL] = useState<string | null>(null);
   const [rendering, setRendering] = useState(false);
-  const [progress, setProgress]   = useState<BulkProgress | null>(null);
-  const [done, setDone]           = useState(false);
-  const [error, setError]         = useState("");
-  const [mode, setMode]           = useState<ExportMode>("combined");
+  const [progress, setProgress]         = useState<BulkProgress | null>(null);
+  const [done, setDone]                 = useState(false);
+  const [error, setError]               = useState("");
+  const [mode, setMode]                 = useState<ExportMode>("combined");
+  const [printingAll, setPrintingAll]   = useState(false);
+  const [printAllPct, setPrintAllPct]   = useState(0);
 
   const canvasVars = extractVarsFromJSON(templateJSON);
   const hasVars    = canvasVars.length > 0;
@@ -170,6 +173,34 @@ export default function BulkExportModal({ templateJSON, canvasSize, onClose }: P
     } catch (e) { setError(String(e)); setProgress(null); }
   };
 
+  const handlePrintCurrent = () => {
+    if (!previewURL) return;
+    openPrintWindow([previewURL], canvasSize);
+  };
+
+  const handlePrintAll = async () => {
+    if (!rows.length) return;
+    setPrintingAll(true);
+    setPrintAllPct(0);
+    setError("");
+    const fabric = await import("fabric");
+    const urls: string[] = [];
+    try {
+      for (let i = 0; i < rows.length; i++) {
+        const url = await renderRow(fabric, templateStr, rows[i], canvasSize.width, canvasSize.height);
+        urls.push(url);
+        setPrintAllPct(Math.round(((i + 1) / rows.length) * 100));
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      openPrintWindow(urls, canvasSize);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPrintingAll(false);
+      setPrintAllPct(0);
+    }
+  };
+
   const pct = progress ? Math.round((progress.current / progress.total) * 100) : 0;
 
   // ── Layout ────────────────────────────────────────────────────────────────
@@ -218,6 +249,32 @@ export default function BulkExportModal({ templateJSON, canvasSize, onClose }: P
                 </button>
               ))}
             </div>
+            <button
+              onClick={handlePrintAll}
+              disabled={running || printingAll || rendering}
+              title="Print all records"
+              className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              {printingAll ? (
+                <>
+                  <svg className="animate-spin w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 16 16">
+                    <circle cx="8" cy="8" r="6" strokeOpacity="0.2"/>
+                    <path d="M8 2a6 6 0 0 1 6 6" strokeLinecap="round"/>
+                  </svg>
+                  Preparing… {printAllPct}%
+                </>
+              ) : (
+                <>
+                  <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 14 14">
+                    <rect x="2" y="5" width="10" height="7" rx="1"/>
+                    <path d="M4 5V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                    <path d="M4 9.5h6M4 11.5h4"/>
+                    <circle cx="10.5" cy="7.5" r="0.6" fill="currentColor"/>
+                  </svg>
+                  Print all
+                </>
+              )}
+            </button>
             <button
               onClick={handleGenerate}
               className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
@@ -385,6 +442,23 @@ export default function BulkExportModal({ templateJSON, canvasSize, onClose }: P
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                   <path d="M4 2l5 4-5 4"/>
                 </svg>
+              </button>
+
+              <div className="h-4 w-px bg-gray-200 mx-1" />
+
+              <button
+                onClick={handlePrintCurrent}
+                disabled={!previewURL || rendering || printingAll}
+                title="Print this record"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 14 14">
+                  <rect x="2" y="5" width="10" height="7" rx="1"/>
+                  <path d="M4 5V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                  <path d="M4 9.5h6M4 11.5h4"/>
+                  <circle cx="10.5" cy="7.5" r="0.6" fill="currentColor"/>
+                </svg>
+                Print this
               </button>
             </div>
           )}

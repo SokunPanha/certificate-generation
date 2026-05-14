@@ -34,6 +34,7 @@ interface Props {
   onGroupSelected: () => void;
   onUngroupSelected: () => void;
   onOpenExport: () => void;
+  onPrint: () => void;
   onSaveTemplate: () => void;
   onLoadTemplate: (file: File) => Promise<void>;
   onOpenBulk: () => void;
@@ -150,7 +151,7 @@ export default function Toolbar({
   previewMode, onPreviewToggle,
   xlsxRows, xlsxRowIdx, onXlsxLoad,
   activeObject, onGroupSelected, onUngroupSelected,
-  onOpenExport,
+  onOpenExport, onPrint,
   onSaveTemplate, onLoadTemplate, onOpenBulk, onOpenTemplates,
   lastSaved,
 }: Props) {
@@ -350,6 +351,7 @@ export default function Toolbar({
     load:      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="w-5 h-5"><path d="M2 3V2a1 1 0 011-1h10a1 1 0 011 1v1"/><path d="M8 15V7M5 10l3-3 3 3"/></svg>,
     library:   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="w-5 h-5"><rect x="1" y="1" width="6" height="6" rx="0.7"/><rect x="9" y="1" width="6" height="6" rx="0.7"/><rect x="1" y="9" width="6" height="6" rx="0.7"/><rect x="9" y="9" width="6" height="6" rx="0.7"/></svg>,
     export:    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="w-5 h-5"><path d="M2 13V14a1 1 0 001 1h10a1 1 0 001-1V13"/><path d="M8 1v8M5 6l3 3 3-3"/></svg>,
+    print:     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="w-5 h-5"><path d="M4 5V2h8v3"/><rect x="2" y="5" width="12" height="7" rx="1"/><path d="M4 12v2h8v-2"/><circle cx="12.5" cy="8.5" r="0.7" fill="currentColor" stroke="none"/></svg>,
     bulk:      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="w-5 h-5"><path d="M2 4h12M2 8h12M2 12h8"/></svg>,
     clear:     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="w-5 h-5"><path d="M2 2l12 12M14 2L2 14"/></svg>,
     group:     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className="w-5 h-5"><rect x="1" y="1" width="6" height="6" rx="0.5"/><rect x="9" y="1" width="6" height="6" rx="0.5"/><rect x="1" y="9" width="6" height="6" rx="0.5"/><rect x="9" y="9" width="6" height="6" rx="0.5"/><rect x="3" y="3" width="10" height="10" rx="1" strokeDasharray="2 1.5"/></svg>,
@@ -525,7 +527,8 @@ export default function Toolbar({
         {/* ── Export ── */}
         <RibbonGroup label="Export">
           <RibbonBtn icon={icons.export} label="Export" onClick={onOpenExport} disabled={!ready} color="green" title="Export pages (PDF / PNG / JPG)" />
-          <RibbonBtn icon={icons.bulk} label="Bulk" onClick={onOpenBulk} disabled={!ready} color="blue" title="Bulk certificate generation" />
+          {/* <RibbonBtn icon={icons.print}  label="Print"  onClick={onPrint}      disabled={!ready} color="indigo" title="Print current page (⌘P)" /> */}
+          <RibbonBtn icon={icons.bulk}   label="Bulk"   onClick={onOpenBulk}   disabled={!ready} color="blue"   title="Bulk certificate generation" />
         </RibbonGroup>
 
       </div>
